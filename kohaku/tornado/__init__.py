@@ -1,5 +1,6 @@
 """Tornado Cash SDK for Kohaku."""
 
+from kohaku.tornado.keychain import TornadoKeychain
 from kohaku.tornado.note import TornadoNote
 from kohaku.tornado.pools import ALL_POOLS, MAINNET_POOLS, SEPOLIA_POOLS, TornadoPool, get_pool
 from kohaku.tornado.vault import TornadoVault
@@ -8,6 +9,7 @@ __all__ = [
     "TornadoNote",
     "TornadoPool",
     "TornadoVault",
+    "TornadoKeychain",
     "ALL_POOLS",
     "MAINNET_POOLS",
     "SEPOLIA_POOLS",

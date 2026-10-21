@@ -72,6 +72,62 @@ def cmd_tornado_check_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tornado_deposit_calldata(args: argparse.Namespace) -> int:
+    from kohaku.tornado.tx import build_deposit_transactions
+
+    note = TornadoNote.from_note_string(args.note)
+    calls = build_deposit_transactions(note)
+
+    print("Deposit Transactions to Fund Note on-chain:\n")
+    for idx, call in enumerate(calls, 1):
+        print(f"Call #{idx}: {call.description}")
+        print(f"  To:       {call.to}")
+        print(f"  Value:    {call.value} wei ({call.value / 10**18} ETH)")
+        print(f"  Calldata: {call.data}")
+        print(f"\n  CLI Command (Cast):")
+        print(f"    cast send {call.to} {call.data} --value {call.value} --private-key <YOUR_KEY>")
+        print()
+    return 0
+
+
+def cmd_tornado_scan_wallet(args: argparse.Namespace) -> int:
+    from kohaku.tornado.keychain import TornadoKeychain
+
+    if args.mnemonic:
+        keychain = TornadoKeychain.from_mnemonic(args.mnemonic, profile_index=args.profile)
+    elif args.private_key:
+        keychain = TornadoKeychain(args.private_key)
+    else:
+        sys.stderr.write("Error: Must provide --mnemonic or --private-key\n")
+        return 1
+
+    print(f"Scanning Tornado Cash notes for derived Keychain address {keychain.address}...")
+
+    def progress(nonce: int, empty: int) -> None:
+        sys.stdout.write(f"\r  Checking nonce {nonce}... ({empty}/20 consecutive empty nonces)")
+        sys.stdout.flush()
+
+    found = keychain.scan_wallet(on_progress=progress)
+    print("\n\nScan Completed!\n")
+
+    if not found:
+        print("No historical or active notes found for this seed phrase.")
+        return 0
+
+    print(f"{'NONCE':<8} {'POOL':<25} {'AMOUNT':<12} {'LEAF':<8} {'STATUS'}")
+    print("-" * 65)
+    total_spendable = 0.0
+    for n in found:
+        status_str = "SPENDABLE ✓" if n["spendable"] else ("SPENT ✗" if n["spent"] else "UNMINED")
+        print(f"{n['nonce']:<8} {n['pool']:<25} {n['amount']:<12} {n['leaf_index']:<8} {status_str}")
+        if n["spendable"] and "ETH" in n["amount"]:
+            total_spendable += float(n["amount"].split()[0])
+
+    print("-" * 65)
+    print(f"Total Spendable Balance: {total_spendable:.4f} ETH")
+    return 0
+
+
 def cmd_privacy_pools_new_note(args: argparse.Namespace) -> int:
     # Value in eth to wei
     value_wei = int(float(args.amount) * 10**18)
@@ -115,6 +171,16 @@ def main() -> None:
     check_p = tornado_sub.add_parser("check-note", help="Check note status on-chain via Saga CDN")
     check_p.add_argument("note", help="Tornado note URI (tornado-<currency>-<amount>-<chain>-0x...)")
     check_p.set_defaults(func=lambda client, args: cmd_tornado_check_note(args))
+
+    calldata_p = tornado_sub.add_parser("deposit-calldata", help="Get on-chain transaction calldata to fund a note")
+    calldata_p.add_argument("note", help="Tornado note URI")
+    calldata_p.set_defaults(func=lambda client, args: cmd_tornado_deposit_calldata(args))
+
+    scan_p = tornado_sub.add_parser("scan-wallet", help="Recover all notes for a mnemonic seed phrase")
+    scan_p.add_argument("--mnemonic", help="BIP-39 mnemonic seed phrase (12 or 24 words)")
+    scan_p.add_argument("--private-key", help="Raw hex private key")
+    scan_p.add_argument("--profile", type=int, default=0, help="Profile derivation index (default: 0)")
+    scan_p.set_defaults(func=lambda client, args: cmd_tornado_scan_wallet(args))
 
     # privacy-pools
     pp_parser = subparsers.add_parser("privacy-pools", help="Privacy Pools commands")

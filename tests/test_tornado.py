@@ -30,3 +30,33 @@ def test_tornado_pools():
     assert pool.asset == "ETH"
     assert pool.amount == "0.1"
     assert pool.contract_address == "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc"
+
+
+def test_keychain_derivation():
+    from kohaku.tornado.keychain import TornadoKeychain
+
+    mnemonic = "test test test test test test test test test test test junk"
+    kc = TornadoKeychain.from_mnemonic(mnemonic)
+    assert kc.address == "0x04fD1301f5EaAA7236c273ea00d03c8c24Ab05D7"
+
+    # Derive note for pool at nonce 0
+    note = kc.derive_note("tornado-cash-1-eth-0.1", nonce=0)
+    assert note.currency == "ETH"
+    assert note.amount == "0.1"
+    assert len(note.secret) == 31
+    assert len(note.nullifier) == 31
+    assert note.commitment < P
+
+
+def test_deposit_transactions():
+    from kohaku.tornado.tx import build_deposit_transactions
+
+    note = TornadoNote.create(currency="ETH", amount="0.1", chain_id=1)
+    calls = build_deposit_transactions(note)
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.to == "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc"
+    assert call.value == 100_000_000_000_000_000
+    assert call.data.startswith("0xb214fa")
+    assert note.commitment_hex.replace("0x", "") in call.data

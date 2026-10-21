@@ -99,6 +99,12 @@ kohaku tornado new-note --amount 0.1 --currency ETH
 # Check status of an existing note
 kohaku tornado check-note tornado-eth-0.1-1-0x...
 
+# Get ready-to-broadcast calldata and Cast command to fund a note on-chain
+kohaku tornado deposit-calldata tornado-eth-0.1-1-0x...
+
+# Recover all Tornado Cash notes from a BIP-39 mnemonic seed phrase
+kohaku tornado scan-wallet --mnemonic "twelve words seed phrase..."
+
 # Generate a Privacy Pools note with dynamic ETH value
 kohaku privacy-pools new-note --amount 2.5
 ```
