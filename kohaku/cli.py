@@ -50,8 +50,16 @@ def cmd_tornado_check_note(args: argparse.Namespace) -> int:
     pool_id = f"tornado-cash-{note.chain_id}-{note.currency.lower()}-{note.amount}"
     print(f"Scanning pool {pool_id} via Saga CDN...")
 
+    def progress(filename: str, current: int, total: int) -> None:
+        sys.stdout.write(f"  [{current}/{total}] Fetching and scanning {filename}...\n")
+        sys.stdout.flush()
+
     vault = TornadoVault(pool_id)
-    status = vault.check_note(note)
+    status = vault.check_note(note, on_chunk=progress)
+
+    print("\nPool Statistics:")
+    print(f"  Total Historical Deposits:    {status['total_deposits']}")
+    print(f"  Total Historical Withdrawals: {status['total_withdrawals']}")
 
     print("\nNote Status:")
     print(f"  Commitment:     {status['commitment']}")
@@ -61,7 +69,6 @@ def cmd_tornado_check_note(args: argparse.Namespace) -> int:
         print(f"  Leaf Index:     {status['leaf_index']}")
     print(f"  Spent:          {'YES (Withdrawal seen) ✗' if status['spent'] else 'NO (Unspent) ✓'}")
     print(f"  Spendable:      {'YES ✓' if status['spendable'] else 'NO ✗'}")
-    print(f"  Merkle Root:    {status['root']}")
     return 0
 
 
