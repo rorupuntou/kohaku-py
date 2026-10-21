@@ -1,5 +1,0 @@
-circomlibpy>=1.0.0
-eth-hash[pycryptodome]>=0.8.0
-
-[dev]
-pytest>=7.0

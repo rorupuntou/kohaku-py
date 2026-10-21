@@ -1,2 +1,0 @@
-[console_scripts]
-kohaku = kohaku.cli:main
