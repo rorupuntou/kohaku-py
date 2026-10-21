@@ -33,6 +33,8 @@ classifiers = [
 dependencies = [
     "circomlibpy>=1.0.0",
     "eth-hash[pycryptodome]>=0.8.0",
+    "eth-account>=0.11.0",
+    "eth-abi>=5.0.0",
 ]
 
 [project.optional-dependencies]
