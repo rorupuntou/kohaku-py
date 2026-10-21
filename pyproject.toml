@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kohaku-py"
+version = "0.1.0"
+description = "Python privacy SDK for Ethereum: Tornado Cash, Privacy Pools, and Saga Sync"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "roru" }
+]
+keywords = [
+    "ethereum",
+    "privacy",
+    "zero-knowledge",
+    "tornado-cash",
+    "privacy-pools",
+    "zk-snarks",
+    "saga-sync",
+    "merkle-tree",
+    "mimc",
+    "poseidon"
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security :: Cryptography",
+]
+dependencies = [
+    "circomlibpy>=1.0.0",
+    "eth-hash[pycryptodome]>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+kohaku = "kohaku.cli:main"
