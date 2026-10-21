@@ -20,6 +20,7 @@ class TransactionCall:
     data: str
     description: str
 
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "to": self.to,
@@ -27,6 +28,9 @@ class TransactionCall:
             "data": self.data,
             "description": self.description,
         }
+
+
+Call = TransactionCall
 
 
 def build_deposit_transactions(note: TornadoNote) -> list[TransactionCall]:

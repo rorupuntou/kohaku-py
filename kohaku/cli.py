@@ -5,10 +5,14 @@ import json
 import sys
 
 from kohaku.privacy_pools.note import PrivacyPoolNote
+from kohaku.privacy_pools.pools import ALL_PRIVACY_POOLS, get_privacy_pool
+from kohaku.privacy_pools.vault import PrivacyPoolsVault
 from kohaku.sync.client import DEFAULT_SAGA_URL, SagaClient
+from kohaku.tornado.circuit import solidity_proof_from_snarkjs
 from kohaku.tornado.note import TornadoNote
-from kohaku.tornado.pools import ALL_POOLS, MAINNET_POOLS
+from kohaku.tornado.pools import ALL_POOLS, get_pool
 from kohaku.tornado.vault import TornadoVault
+from kohaku.tornado.withdraw import build_withdraw_transaction, build_withdrawal_inputs
 
 
 def cmd_sync_list(client: SagaClient, args: argparse.Namespace) -> int:
@@ -90,6 +94,62 @@ def cmd_tornado_deposit_calldata(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tornado_withdraw_inputs(args: argparse.Namespace) -> int:
+    note = TornadoNote.from_note_string(args.note)
+    pool_id = f"tornado-cash-{note.chain_id}-{note.currency.lower()}-{note.amount}"
+    print(f"Fetching inclusion proof from {pool_id} via Saga CDN...")
+
+    vault = TornadoVault(pool_id)
+    inputs = build_withdrawal_inputs(
+        vault=vault,
+        note=note,
+        recipient=args.recipient,
+        relayer=args.relayer or "0x0000000000000000000000000000000000000000",
+        fee=args.fee,
+        refund=args.refund,
+    )
+
+    inputs_json = inputs.to_json()
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(inputs_json)
+        print(f"\nGroth16 Circuit Inputs saved to {args.output}!")
+    else:
+        print("\nGroth16 Circuit Inputs (JSON for snarkjs):")
+        print(inputs_json)
+    return 0
+
+
+def cmd_tornado_withdraw_calldata(args: argparse.Namespace) -> int:
+    # Read proof bytes
+    if args.proof.endswith(".json"):
+        with open(args.proof) as f:
+            proof_data = json.load(f)
+        proof_bytes = solidity_proof_from_snarkjs(proof_data)
+    else:
+        clean_hex = args.proof[2:] if args.proof.startswith("0x") else args.proof
+        proof_bytes = bytes.fromhex(clean_hex)
+
+    pool = get_pool(args.pool)
+    call = build_withdraw_transaction(
+        pool=pool,
+        proof_bytes=proof_bytes,
+        root=args.root,
+        nullifier_hash=args.nullifier_hash,
+        recipient=args.recipient,
+        relayer=args.relayer or "0x0000000000000000000000000000000000000000",
+        fee=args.fee,
+        refund=args.refund,
+    )
+
+    print("Withdrawal Transaction Call:\n")
+    print(f"  To:       {call.to}")
+    print(f"  Calldata: {call.data}")
+    print(f"\n  CLI Command (Cast):")
+    print(f"    cast send {call.to} {call.data} --private-key <YOUR_KEY>")
+    return 0
+
+
 def cmd_tornado_scan_wallet(args: argparse.Namespace) -> int:
     from kohaku.tornado.keychain import TornadoKeychain
 
@@ -128,8 +188,15 @@ def cmd_tornado_scan_wallet(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_privacy_pools_pools(args: argparse.Namespace) -> int:
+    print(f"{'POOL ID':<25} {'ASSET':<8} {'CONTRACT ADDRESS':<44} {'DECIMALS'}")
+    print("-" * 88)
+    for p_id, p in sorted(ALL_PRIVACY_POOLS.items()):
+        print(f"{p_id:<25} {p.asset:<8} {p.contract_address:<44} {p.decimals}")
+    return 0
+
+
 def cmd_privacy_pools_new_note(args: argparse.Namespace) -> int:
-    # Value in eth to wei
     value_wei = int(float(args.amount) * 10**18)
     note = PrivacyPoolNote.create(value=value_wei, label=args.label)
     print("New Privacy Pools Note Generated:")
@@ -137,6 +204,37 @@ def cmd_privacy_pools_new_note(args: argparse.Namespace) -> int:
     print(f"  Nullifier Hash: {note.nullifier_hash_hex}")
     print(f"  Value:          {args.amount} ETH ({value_wei} wei)")
     print(f"  Label:          {note.label}")
+    return 0
+
+
+def cmd_privacy_pools_check_note(args: argparse.Namespace) -> int:
+    vault = PrivacyPoolsVault(args.pool)
+    print(f"Scanning Privacy Pool {args.pool} via Saga CDN...")
+
+    def progress(filename: str, current: int, total: int) -> None:
+        sys.stdout.write(f"  [{current}/{total}] Fetching and scanning {filename}...\n")
+        sys.stdout.flush()
+
+    comm = int(args.commitment, 16) if args.commitment.startswith("0x") else int(args.commitment)
+    vault.sync(on_chunk=progress)
+
+    is_mined = comm in vault._commitments_set
+    is_spent = comm in vault.spent_nullifiers
+
+    print("\nPool Statistics:")
+    print(f"  Total Historical Deposits:    {len(vault.commitments)}")
+    print(f"  Total Historical Withdrawals: {len(vault.spent_nullifiers)}")
+
+    print("\nCommitment Status:")
+    print(f"  Commitment:     {hex(comm)}")
+    print(f"  Mined on-chain: {'YES ✓' if is_mined else 'NO ✗'}")
+    if is_mined:
+        idx = vault.commitments.index(comm)
+        print(f"  Leaf Index:     {idx}")
+        amt = vault.commitments_to_amounts.get(comm)
+        if amt is not None:
+            print(f"  Deposit Amount: {amt / 10**18} ETH ({amt} wei)")
+    print(f"  Spent:          {'YES ✗' if is_spent else 'NO ✓'}")
     return 0
 
 
@@ -176,6 +274,26 @@ def main() -> None:
     calldata_p.add_argument("note", help="Tornado note URI")
     calldata_p.set_defaults(func=lambda client, args: cmd_tornado_deposit_calldata(args))
 
+    w_inputs = tornado_sub.add_parser("withdraw-inputs", help="Generate Groth16 circuit inputs for note withdrawal")
+    w_inputs.add_argument("note", help="Tornado note URI")
+    w_inputs.add_argument("--recipient", required=True, help="Recipient address for withdrawn funds")
+    w_inputs.add_argument("--relayer", default="0x0000000000000000000000000000000000000000", help="Relayer address")
+    w_inputs.add_argument("--fee", type=int, default=0, help="Relayer fee in wei")
+    w_inputs.add_argument("--refund", type=int, default=0, help="Relayer refund in wei")
+    w_inputs.add_argument("--output", help="Save inputs to JSON file path")
+    w_inputs.set_defaults(func=lambda client, args: cmd_tornado_withdraw_inputs(args))
+
+    w_calldata = tornado_sub.add_parser("withdraw-calldata", help="Generate withdraw transaction calldata")
+    w_calldata.add_argument("--pool", required=True, help="Pool ID (e.g. tornado-cash-1-eth-0.1)")
+    w_calldata.add_argument("--proof", required=True, help="256-byte hex proof or path to snarkjs proof.json")
+    w_calldata.add_argument("--root", required=True, help="Merkle root hex or decimal")
+    w_calldata.add_argument("--nullifier-hash", required=True, help="Nullifier hash hex or decimal")
+    w_calldata.add_argument("--recipient", required=True, help="Recipient address")
+    w_calldata.add_argument("--relayer", default="0x0000000000000000000000000000000000000000", help="Relayer address")
+    w_calldata.add_argument("--fee", type=int, default=0, help="Relayer fee in wei")
+    w_calldata.add_argument("--refund", type=int, default=0, help="Relayer refund in wei")
+    w_calldata.set_defaults(func=lambda client, args: cmd_tornado_withdraw_calldata(args))
+
     scan_p = tornado_sub.add_parser("scan-wallet", help="Recover all notes for a mnemonic seed phrase")
     scan_p.add_argument("--mnemonic", help="BIP-39 mnemonic seed phrase (12 or 24 words)")
     scan_p.add_argument("--private-key", help="Raw hex private key")
@@ -186,10 +304,18 @@ def main() -> None:
     pp_parser = subparsers.add_parser("privacy-pools", help="Privacy Pools commands")
     pp_sub = pp_parser.add_subparsers(dest="subcommand", required=True)
 
+    pp_pools = pp_sub.add_parser("pools", help="List known 0xBow Privacy Pools")
+    pp_pools.set_defaults(func=lambda client, args: cmd_privacy_pools_pools(args))
+
     pp_new = pp_sub.add_parser("new-note", help="Generate a new Privacy Pools note")
     pp_new.add_argument("--amount", default="1.0", help="Amount in ETH (arbitrary decimal amount)")
     pp_new.add_argument("--label", type=int, default=0, help="Association label (default: 0)")
     pp_new.set_defaults(func=lambda client, args: cmd_privacy_pools_new_note(args))
+
+    pp_check = pp_sub.add_parser("check-note", help="Check note / commitment status in a Privacy Pool")
+    pp_check.add_argument("commitment", help="Commitment hex string (e.g. 0x...)")
+    pp_check.add_argument("--pool", default="privacy-pools-1-eth", help="Pool ID (default: privacy-pools-1-eth)")
+    pp_check.set_defaults(func=lambda client, args: cmd_privacy_pools_check_note(args))
 
     args = parser.parse_args()
     client = SagaClient(base_url=args.url)

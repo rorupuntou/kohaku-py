@@ -105,8 +105,25 @@ kohaku tornado deposit-calldata tornado-eth-0.1-1-0x...
 # Recover all Tornado Cash notes from a BIP-39 mnemonic seed phrase
 kohaku tornado scan-wallet --mnemonic "twelve words seed phrase..."
 
+# Generate Groth16 circuit inputs (JSON for snarkjs) to withdraw a note
+kohaku tornado withdraw-inputs tornado-eth-0.1-1-0x... --recipient 0xYourRecipientAddress --output inputs.json
+
+# Encode withdrawal transaction calldata to submit to the Tornado Cash contract
+kohaku tornado withdraw-calldata \
+  --pool tornado-cash-1-eth-0.1 \
+  --proof proof.json \
+  --root 0x... \
+  --nullifier-hash 0x... \
+  --recipient 0xYourRecipientAddress
+
+# List all official 0xBow Privacy Pools on Ethereum mainnet
+kohaku privacy-pools pools
+
 # Generate a Privacy Pools note with dynamic ETH value
 kohaku privacy-pools new-note --amount 2.5
+
+# Check on-chain deposit/withdrawal status of a Privacy Pools commitment via Saga CDN
+kohaku privacy-pools check-note 0x... --pool privacy-pools-1-eth
 ```
 
 ---
