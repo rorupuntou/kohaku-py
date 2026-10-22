@@ -238,6 +238,29 @@ def cmd_privacy_pools_check_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stealth_meta_address(args: argparse.Namespace) -> int:
+    from kohaku.stealth import derive_stealth_keypair
+
+    pair = derive_stealth_keypair(args.mnemonic, chain_id=args.chain_id)
+    print("Derived ERC-5564 Stealth Meta-Address:")
+    print(f"  URI:                  {pair.stealth_meta_address_uri}")
+    print(f"  Stealth Meta Address: {pair.stealth_meta_address}")
+    print(f"  Spending Public Key:  {pair.spending_public_key}")
+    print(f"  Viewing Public Key:   {pair.viewing_public_key}")
+    return 0
+
+
+def cmd_stealth_generate_address(args: argparse.Namespace) -> int:
+    from kohaku.stealth import generate_stealth_address
+
+    result = generate_stealth_address(args.meta_address)
+    print("Generated One-Time Stealth Address:")
+    print(f"  Stealth Address:      {result['stealth_address']}")
+    print(f"  Ephemeral Public Key: {result['ephemeral_public_key']}")
+    print(f"  View Tag:             {result['view_tag']}")
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="kohaku",
@@ -316,6 +339,19 @@ def main() -> None:
     pp_check.add_argument("commitment", help="Commitment hex string (e.g. 0x...)")
     pp_check.add_argument("--pool", default="privacy-pools-1-eth", help="Pool ID (default: privacy-pools-1-eth)")
     pp_check.set_defaults(func=lambda client, args: cmd_privacy_pools_check_note(args))
+
+    # stealth
+    stealth_parser = subparsers.add_parser("stealth", help="ERC-5564 Stealth Address commands")
+    stealth_sub = stealth_parser.add_subparsers(dest="subcommand", required=True)
+
+    meta_p = stealth_sub.add_parser("meta-address", help="Derive ERC-5564 stealth meta-address URI from seed phrase")
+    meta_p.add_argument("--mnemonic", required=True, help="BIP-39 mnemonic seed phrase (12 or 24 words)")
+    meta_p.add_argument("--chain-id", type=int, default=1, help="Network chain ID (default: 1 for eth, 11155111 for sep)")
+    meta_p.set_defaults(func=lambda client, args: cmd_stealth_meta_address(args))
+
+    gen_p = stealth_sub.add_parser("generate-address", help="Generate one-time stealth address for a recipient meta-address")
+    gen_p.add_argument("meta_address", help="Stealth meta-address URI (st:<chain>:0x...) or raw 66-byte hex")
+    gen_p.set_defaults(func=lambda client, args: cmd_stealth_generate_address(args))
 
     args = parser.parse_args()
     client = SagaClient(base_url=args.url)

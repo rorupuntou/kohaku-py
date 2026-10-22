@@ -18,6 +18,7 @@ Companion implementation to the Ethereum Foundation's **[ethereum/kohaku](https:
 - **`kohaku.merkle`**: 20-level binary Merkle Tree supporting incremental inserts, zero-branch caching, and cryptographic proof generation.
 - **`kohaku.tornado`**: Tornado Cash note derivation (`nullifier` & `secret`), commitment hashing, pool registry, and live on-chain status checking.
 - **`kohaku.privacy_pools`**: Privacy Pools note derivation with arbitrary deposit amounts, labels, and Association Set verification (0xBow / Vitalik compliance model).
+- **`kohaku.stealth`**: ERC-5564 & ERC-6538 Stealth Meta-Addresses. Generates Scheme 1 ephemeral stealth addresses via secp256k1 ECDH, enabling untraceable one-time deposit/withdrawal destinations derived from BIP-44 paths (`m/44'/60'/0'/5564'/1'/...`).
 - **`kohaku.cli`**: Full-featured command-line interface (`kohaku`).
 
 ---
@@ -124,6 +125,12 @@ kohaku privacy-pools new-note --amount 2.5
 
 # Check on-chain deposit/withdrawal status of a Privacy Pools commitment via Saga CDN
 kohaku privacy-pools check-note 0x... --pool privacy-pools-1-eth
+
+# Derive ERC-5564 Stealth Meta-Address from mnemonic (st:eth:0x...)
+kohaku stealth meta-address --mnemonic "twelve words seed phrase..."
+
+# Generate a one-time stealth address for a recipient's meta-address (secp256k1 ECDH)
+kohaku stealth generate-address st:eth:0x...
 ```
 
 ---

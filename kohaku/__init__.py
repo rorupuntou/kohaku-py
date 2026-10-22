@@ -1,7 +1,8 @@
-"""kohaku-py: Python privacy SDK for Ethereum (Tornado Cash, Privacy Pools, Saga Sync)."""
+"""kohaku-py: Python privacy SDK for Ethereum (Tornado Cash, Privacy Pools, Stealth Addresses, Saga Sync)."""
 
 from kohaku.merkle import MerkleProof, MerkleTree
 from kohaku.privacy_pools import AssociationSet, PrivacyPoolNote, PrivacyPoolsVault
+from kohaku.stealth import StealthKeypair, derive_stealth_keypair, generate_stealth_address
 from kohaku.sync import SagaClient
 from kohaku.tornado import TornadoNote, TornadoPool, TornadoVault
 
@@ -16,4 +17,7 @@ __all__ = [
     "PrivacyPoolNote",
     "PrivacyPoolsVault",
     "AssociationSet",
+    "StealthKeypair",
+    "derive_stealth_keypair",
+    "generate_stealth_address",
 ]
