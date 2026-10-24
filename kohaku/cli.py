@@ -261,6 +261,13 @@ def cmd_stealth_generate_address(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    from kohaku.tui.app import run_tui
+
+    run_tui(mnemonic=args.mnemonic, chain_id=args.chain_id)
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="kohaku",
@@ -352,6 +359,12 @@ def main() -> None:
     gen_p = stealth_sub.add_parser("generate-address", help="Generate one-time stealth address for a recipient meta-address")
     gen_p.add_argument("meta_address", help="Stealth meta-address URI (st:<chain>:0x...) or raw 66-byte hex")
     gen_p.set_defaults(func=lambda client, args: cmd_stealth_generate_address(args))
+
+    # tui
+    tui_p = subparsers.add_parser("tui", help="Launch interactive Terminal Desktop Wallet UI (edw-py)")
+    tui_p.add_argument("--mnemonic", help="Optional BIP-39 mnemonic phrase to pre-load")
+    tui_p.add_argument("--chain-id", type=int, default=1, help="Network chain ID (1 for mainnet, 11155111 for sepolia)")
+    tui_p.set_defaults(func=lambda client, args: cmd_tui(args))
 
     args = parser.parse_args()
     client = SagaClient(base_url=args.url)

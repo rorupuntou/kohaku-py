@@ -72,13 +72,15 @@ def _point_to_address(point: tuple[int, int]) -> str:
     return "0x" + keccak(uncompressed)[12:].hex()
 
 
-def derive_stealth_keypair(mnemonic: str, chain_id: int = 1) -> StealthKeypair:
+def derive_stealth_keypair(mnemonic: str, chain_id: int = 1, profile: int = 0) -> StealthKeypair:
     """Derives the fixed ERC-5564 stealth spending and viewing keypairs
 
-    from a BIP-39 mnemonic seed phrase.
+    from a BIP-39 mnemonic seed phrase at profile index.
     """
-    spend_acc = Account.from_mnemonic(mnemonic, account_path=STEALTH_SPENDING_PATH)
-    view_acc = Account.from_mnemonic(mnemonic, account_path=STEALTH_VIEWING_PATH)
+    spend_path = f"m/44'/60'/{profile}'/5564'/1'/0'"
+    view_path = f"m/44'/60'/{profile}'/5564'/1'/1'"
+    spend_acc = Account.from_mnemonic(mnemonic, account_path=spend_path)
+    view_acc = Account.from_mnemonic(mnemonic, account_path=view_path)
 
     spend_priv_hex = spend_acc.key.hex()
     view_priv_hex = view_acc.key.hex()
