@@ -237,6 +237,35 @@ def cmd_shield(args: argparse.Namespace) -> int:
     return 0
 
 
+from kohaku.tornado.relayers import DEFAULT_ACTIVE_MAINNET_RELAYERS, RelayerRegistryVault
+
+
+def cmd_relayers(args: argparse.Namespace) -> int:
+    print("════════════════════════════════════════════════════════════════════════════")
+    print("             TORNADO CASH ON-CHAIN RELAYER REGISTRY (MAINNET)               ")
+    print("════════════════════════════════════════════════════════════════════════════")
+    for idx, entry in enumerate(DEFAULT_ACTIVE_MAINNET_RELAYERS, start=1):
+        ens = entry["ens"]
+        url = entry["url"]
+        addr = entry["address"]
+        stake = entry["stake_torn"]
+        status_str = "REGISTRY CACHED"
+        if getattr(args, "probe", False):
+            try:
+                quote = RelayerRegistryVault.fetch_relayer_status(
+                    url, socks5_proxy=args.tor_proxy, timeout=5.0
+                )
+                status_str = (
+                    f"ONLINE | Fee: {quote.service_fee_percent:.3f}% | Gas: {quote.fast_gas_gwei:.2f} gwei"
+                )
+            except Exception as exc:
+                status_str = f"OFFLINE ({exc})"
+        print(f"  [{idx}] {ens:<24} | Stake: {stake:>9.2f} TORN | {url}")
+        print(f"      RewardAccount: {addr} | {status_str}")
+    print("════════════════════════════════════════════════════════════════════════════")
+    return 0
+
+
 def cmd_unshield(args: argparse.Namespace) -> int:
     db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
     tm = TicketManager(db, profile_m=0, profile_x=0)
@@ -249,6 +278,14 @@ def cmd_unshield(args: argparse.Namespace) -> int:
         selected = tm.select_cover_tickets(amount_wei, currency="ETH", chain_id=args.chain_id)
         mode_str = "COVER (LARGEST-FIRST)"
 
+    quote = None
+    if getattr(args, "relayer_url", None):
+        quote = RelayerRegistryVault.fetch_relayer_status(
+            args.relayer_url, socks5_proxy=args.tor_proxy
+        )
+    elif getattr(args, "auto_relayer", False):
+        quote = RelayerRegistryVault.select_best_relayer(socks5_proxy=args.tor_proxy)
+
     total_selected_wei = sum(t.amount_wei for t in selected)
     print("════════════════════════════════════════════════════════════════════════════")
     print(f"                  EDW-PY UNSHIELD COIN SELECTION ({mode_str})")
@@ -256,12 +293,21 @@ def cmd_unshield(args: argparse.Namespace) -> int:
     print(f"Target Recipient:    {args.to}")
     print(f"Requested Amount:    {args.amount} ETH ({amount_wei} wei)")
     print(f"Selected Notes ({len(selected)}): {total_selected_wei / 1e18:.4f} ETH total")
+    if quote is not None:
+        print(f"Selected Relayer:    {quote.base_url} (Reward: {quote.reward_account})")
+        print(f"Relayer Service Fee: {quote.service_fee_percent:.3f}%")
     for idx, t in enumerate(selected):
+        fee_info = ""
+        if quote is not None:
+            fee_wei = quote.compute_fee_wei(t.amount_wei)
+            net_wei = max(0, t.amount_wei - fee_wei)
+            fee_info = f" | Fee: {fee_wei / 1e18:.6f} ETH | Net: {net_wei / 1e18:.6f} ETH"
         print(
-            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}..."
+            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}"
         )
     print("════════════════════════════════════════════════════════════════════════════")
     return 0
+
 
 
 def cmd_network(args: argparse.Namespace) -> int:
@@ -377,7 +423,19 @@ def main() -> None:
     un_p.add_argument("--amount", required=True, help="Decimal ETH amount to unshield (e.g. 1.1)")
     un_p.add_argument("--to", required=True, help="Recipient Ethereum address (0x...)")
     un_p.add_argument("--exact", action="store_true", help="Require exact denomination match instead of cover")
+    un_p.add_argument(
+        "--auto-relayer",
+        action="store_true",
+        help="Probe active on-chain relayers (/v1/status) and auto-select the healthiest lowest-fee relayer",
+    )
+    un_p.add_argument("--relayer-url", help="Explicit relayer base URL to query for /v1/status fee quote")
     un_p.set_defaults(func=cmd_unshield)
+
+    # relayers (on-chain Tornado Cash Relayer Registry & live /v1/status probing)
+    rel_p = subparsers.add_parser("relayers", help="List and probe active on-chain Tornado Cash relayers")
+    rel_p.add_argument("--probe", action="store_true", help="Query live /v1/status endpoints for fee & health quotes")
+    rel_p.set_defaults(func=cmd_relayers)
+
 
     # network (encrypted per-chain RPC, Bundler, and Saga Indexer registry)
     net_p = subparsers.add_parser("network", help="Manage encrypted per-chain RPC, Bundler, and Indexer services")

@@ -186,3 +186,40 @@ def test_relayer_registry_vault_and_ens_resolution(monkeypatch):
     monkeypatch.setattr(P2PBroadcaster, "rpc_call", fake_rpc)
     url = RelayerRegistryVault.resolve_ens_url("reltor.eth", "http://127.0.0.1:8545")
     assert url == "https://eth.reltor.su"
+
+
+def test_relayer_status_quote_and_auto_selection(monkeypatch):
+    import kohaku.edw.p2p as p2p_mod
+    from kohaku.tornado.relayers import RelayerRegistryVault
+
+    def fake_get_json(url, proxy=None, timeout=8.0):
+        if "00relayer" in url:
+            return {
+                "rewardAccount": "0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753",
+                "tornadoServiceFee": 0.36,
+                "netId": 1,
+                "gasPrices": {"fast": 1.5},
+                "ethPrices": {"torn": "0.0022"},
+                "health": {"status": "true", "error": ""},
+            }
+        return {
+            "rewardAccount": "0x0A5B2bF3cCfB44C1D22F07Eed9553eCba752D4aD",
+            "tornadoServiceFee": 0.385,
+            "netId": 1,
+            "gasPrices": {"fast": 2.0},
+            "ethPrices": {"torn": "0.0022"},
+            "health": {"status": "true", "error": ""},
+        }
+
+    monkeypatch.setattr(p2p_mod, "get_json_via_proxy", fake_get_json)
+    best = RelayerRegistryVault.select_best_relayer()
+    assert best.base_url == "https://eth.00relayer.xyz"
+    assert best.service_fee_percent == 0.36
+    assert best.reward_account.lower() == "0xda0b76cc92e94a6f972ed29c104bbe8d73c2f753"
+
+    # 10 ETH note (10 * 10**18 wei) at 0.36% (36 bps) + 350,000 gas * 1.5 gwei
+    fee_wei = best.compute_fee_wei(10 * 10**18, gas_limit=350_000)
+    expected_service = (10 * 10**18 * 36) // 10_000
+    expected_gas = int(1.5 * 1e9) * 350_000
+    assert fee_wei == expected_service + expected_gas
+

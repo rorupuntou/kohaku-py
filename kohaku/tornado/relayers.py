@@ -221,3 +221,138 @@ class RelayerRegistryVault:
             url_str = f"https://{url_str}"
         return url_str or None
 
+    @staticmethod
+    def fetch_relayer_status(
+        base_url: str,
+        socks5_proxy: str | None = None,
+        timeout: float = 8.0,
+    ) -> RelayerStatusQuote:
+        """Queries `<base_url>/v1/status` (or `/status`) over HTTPS or Tor SOCKS5
+        and returns a parsed `RelayerStatusQuote`.
+        """
+        from kohaku.edw.p2p import get_json_via_proxy
+
+        clean_base = base_url.rstrip("/")
+        last_err: Exception | None = None
+        for suffix in ("/v1/status", "/status"):
+            target = f"{clean_base}{suffix}"
+            try:
+                data = get_json_via_proxy(target, proxy=socks5_proxy, timeout=timeout)
+                if isinstance(data, dict) and "rewardAccount" in data:
+                    health_obj = data.get("health") or {}
+                    is_healthy = str(health_obj.get("status", "true")).lower() == "true"
+                    return RelayerStatusQuote(
+                        base_url=clean_base,
+                        reward_account=str(data["rewardAccount"]),
+                        service_fee_percent=float(data.get("tornadoServiceFee", 0.5)),
+                        net_id=int(data.get("netId", 1)),
+                        healthy=is_healthy,
+                        gas_prices=dict(data.get("gasPrices") or {}),
+                        eth_prices=dict(data.get("ethPrices") or {}),
+                    )
+            except Exception as e:
+                last_err = e
+                continue
+        raise ConnectionError(f"Failed to query relayer status from {clean_base}: {last_err}")
+
+    @classmethod
+    def select_best_relayer(
+        cls,
+        candidates: list[dict[str, Any]] | None = None,
+        socks5_proxy: str | None = None,
+        timeout: float = 6.0,
+    ) -> RelayerStatusQuote:
+        """Probes candidate relayers and returns the healthiest relayer with the lowest fee."""
+        relayer_list = candidates if candidates is not None else list(DEFAULT_ACTIVE_MAINNET_RELAYERS)
+        quotes: list[RelayerStatusQuote] = []
+        for entry in relayer_list:
+            url = entry["url"]
+            expected_addr = entry.get("address", "").lower()
+            try:
+                quote = cls.fetch_relayer_status(url, socks5_proxy=socks5_proxy, timeout=timeout)
+                if expected_addr and quote.reward_account.lower() != expected_addr:
+                    continue
+                if quote.healthy:
+                    quotes.append(quote)
+            except Exception:
+                continue
+        if not quotes:
+            raise ConnectionError("No healthy Tornado Cash relayers responded to /v1/status")
+        return sorted(quotes, key=lambda q: q.service_fee_percent)[0]
+
+
+@dataclass
+class RelayerStatusQuote:
+    """Live status and fee quote returned by a Tornado Cash Relayer `/v1/status` endpoint."""
+
+    base_url: str
+    reward_account: str
+    service_fee_percent: float
+    net_id: int = 1
+    healthy: bool = True
+    gas_prices: dict[str, Any] = field(default_factory=dict)
+    eth_prices: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def fast_gas_gwei(self) -> float:
+        if "fast" in self.gas_prices and self.gas_prices["fast"] is not None:
+            return float(self.gas_prices["fast"])
+        if "maxFeePerGas" in self.gas_prices and self.gas_prices["maxFeePerGas"] is not None:
+            val = float(self.gas_prices["maxFeePerGas"])
+            return val / 1e9 if val > 1e6 else val
+        return 1.0
+
+    def compute_fee_wei(
+        self,
+        amount_wei: int,
+        gas_limit: int = 350_000,
+    ) -> int:
+        """Calculates the total relayer fee in wei (`protocol_percent_fee + gas_reimbursement`)."""
+        # Service fee percentage in basis points (e.g. 0.36% -> 36 bps -> * 36 // 10_000)
+        bps = int(round(self.service_fee_percent * 100))
+        service_fee = (amount_wei * bps) // 10_000
+        gas_fee_wei = int(self.fast_gas_gwei * 1e9) * gas_limit
+        return service_fee + gas_fee_wei
+
+
+
+DEFAULT_ACTIVE_MAINNET_RELAYERS: tuple[dict[str, Any], ...] = (
+    {
+        "ens": "00relayer.eth",
+        "address": "0xda0b76cc92e94a6f972ed29c104bbe8d73c2f753",
+        "url": "https://eth.00relayer.xyz",
+        "stake_torn": 17096.47,
+    },
+    {
+        "ens": "safe-torn.eth",
+        "address": "0x0a5b2bf3ccfb44c1d22f07eed9553ecba752d4ad",
+        "url": "https://eth3.safetorn.ovh",
+        "stake_torn": 26388.00,
+    },
+    {
+        "ens": "dieguis-and-martis.eth",
+        "address": "0x9edde74078fba110c22922a925f653bcf1f60121",
+        "url": "https://mainnet.dieguis-and-martis.xyz",
+        "stake_torn": 993.69,
+    },
+    {
+        "ens": "tor-relay.eth",
+        "address": "0x7d2a66f05d2bb0ff4dc856eb317196c59ac3e932",
+        "url": "https://tor.fakkk.vin",
+        "stake_torn": 1464.19,
+    },
+    {
+        "ens": "sky-relayer.eth",
+        "address": "0xee4c45cc5eaa535cb8a8ffdc92f2839a601fe226",
+        "url": "https://sky-relayer.xyz",
+        "stake_torn": 14083.79,
+    },
+    {
+        "ens": "reltor.eth",
+        "address": "0x4750bcfcc340aa4b31be7e71fa072716d28c29c5",
+        "url": "https://eth.reltor.su",
+        "stake_torn": 5714.80,
+    },
+)
+
+

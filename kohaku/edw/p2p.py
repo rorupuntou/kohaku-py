@@ -150,6 +150,63 @@ def post_json_rpc(
         return json.loads(resp.read().decode("utf-8"))
 
 
+def get_json_via_proxy(
+    url: str,
+    proxy: Optional[str] = None,
+    timeout: float = 8.0,
+) -> dict[str, Any]:
+    """Performs an HTTP GET and parses JSON response, supporting SOCKS5/Tor proxy."""
+    parsed = urllib.parse.urlparse(url)
+    is_ssl = parsed.scheme == "https"
+    port = parsed.port or (443 if is_ssl else 80)
+    host = parsed.hostname or "127.0.0.1"
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+
+    if proxy:
+        proxy_parsed = urllib.parse.urlparse(proxy if "://" in proxy else f"socks5://{proxy}")
+        p_host = proxy_parsed.hostname or "127.0.0.1"
+        p_port = proxy_parsed.port or 9050
+
+        raw_sock = socks5_connect(host, port, p_host, p_port, timeout=timeout)
+        if is_ssl:
+            context = ssl.create_default_context()
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        else:
+            sock = raw_sock
+
+        req_headers = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"User-Agent: edw-py/0.1.0\r\n"
+            f"Accept: application/json\r\n"
+            f"Connection: close\r\n\r\n"
+        ).encode("utf-8")
+        sock.sendall(req_headers)
+
+        response_bytes = bytearray()
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response_bytes.extend(chunk)
+        sock.close()
+
+        header_end = response_bytes.find(b"\r\n\r\n")
+        if header_end == -1:
+            raise ValueError("Malformed HTTP response from proxy")
+        body = bytes(response_bytes[header_end + 4 :])
+        return json.loads(body.decode("utf-8", errors="replace"))
+
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "edw-py/0.1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
 # Default privacy-preserving and public broadcast endpoints
 DEFAULT_BROADCAST_PEERS: list[str] = [
     "https://rpc.flashbots.net",               # MEV-protected mempool (no frontrunning)
