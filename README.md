@@ -140,11 +140,125 @@ Using `kohaku-py`'s offline snapshot engine across the complete Saga state index
 
 ---
 
+## Python SDK Quickstart
+
+### 1. Offline EIP-1559 Transaction Signing & Gasless Withdraw
+
+```python
+from kohaku.edw.tx_builder import TransactionBuilder
+from kohaku.edw.tickets import Ticket
+
+# Create an offline draft note
+ticket = Ticket.create_draft(currency="ETH", amount="1", chain_id=1)
+
+# Build a gasless withdrawal payload
+payload = TransactionBuilder.build_gasless_withdraw_payload(
+    ticket=ticket,
+    recipient_address="0xVirginAddress...",
+    merkle_root="0xRoot...",
+    proof_bytes=proof_bytes,
+    relayer_address="0xRelayerNode...",
+    relayer_fee_eth=0.01,
+)
+print("Calldata ready:", payload.calldata)
+print("Net ETH received by recipient:", payload.net_recipient_eth)
+```
+
+### 2. Encrypted Blinded Datastore
+
+```python
+from kohaku.edw.storage.database import EncryptedDatabase
+
+# Open encrypted store
+db = EncryptedDatabase.open("~/.edw/1", password="my-password")
+
+# Write confidential key material (filename on disk is completely blinded)
+db.set("vault:tornado", "note:0", b"secret-payload")
+
+# Read back
+secret = db.get("vault:tornado", "note:0")
+```
+
+### 3. Generate & Inspect Tornado Cash Notes & Live Relayer Quotes
+
+```python
+from kohaku.tornado import TornadoNote, TornadoVault
+from kohaku.tornado.relayers import RelayerRegistryVault
+
+note = TornadoNote.create(currency="ETH", amount="0.1", chain_id=1)
+print("Note URI:", note.to_note_string())
+print("Deposit Commitment:", note.commitment_hex)
+print("Withdrawal Nullifier Hash:", note.nullifier_hash_hex)
+
+# Probe active on-chain relayers (/v1/status) and select lowest fee
+best_relayer = RelayerRegistryVault.select_best_relayer()
+print("Best Relayer:", best_relayer.base_url, "Fee %:", best_relayer.service_fee_percent)
+```
+
+### 4. Railgun `0zk` Bech32m Addresses & Multi-Tree UTXO Audit
+
+```python
+from kohaku.railgun import RailgunAddress, RailgunVault
+from kohaku.sync.client import SagaClient
+
+# Encode / decode a 73-byte Railgun 0zk1qy... Bech32m address
+addr = RailgunAddress.from_0zk("0zk1qy...")
+print("Master Public Key:", hex(addr.master_public_key))
+
+# Reconstruct multi-tree UTXO state from local snapshots or Saga CDN
+vault = RailgunVault(client=SagaClient(local_dir="/path/to/snapshots", verify_checksum=False))
+vault.sync_ops()
+vault.sync_events()
+print(vault.utxo_audit_summary())
+```
+
+---
+
 ## Test Suite
 
 ```bash
 pytest -v
-# ============================== 36 passed in 4.48s ==============================
+```
+
+```
+tests/test_crypto.py::test_mimc_constants PASSED                         [  2%]
+tests/test_crypto.py::test_tornado_zero_value_propagation PASSED         [  5%]
+tests/test_crypto.py::test_poseidon PASSED                               [  8%]
+tests/test_edw_cli.py::test_edw_cli_full_workflow PASSED                 [ 11%]
+tests/test_edw_cli.py::test_edw_cli_shield_unshield_and_network PASSED   [ 13%]
+tests/test_edw_p2p.py::test_socks5_handshake_mock_server PASSED          [ 16%]
+tests/test_edw_p2p.py::test_p2p_broadcaster_with_failover PASSED         [ 19%]
+tests/test_edw_p2p.py::test_dispatch_gasless_withdrawal PASSED           [ 22%]
+tests/test_edw_storage.py::test_blinded_cipher_lifecycle PASSED          [ 25%]
+tests/test_edw_storage.py::test_encrypted_database_disk_zero_leakage PASSED [ 27%]
+tests/test_edw_storage.py::test_keyring_manager_and_fresh_address_rotation PASSED [ 30%]
+tests/test_edw_tickets.py::test_ticket_draft_and_invoice_generation PASSED [ 33%]
+tests/test_edw_tickets.py::test_ticket_manager_encrypted_lifecycle PASSED [ 36%]
+tests/test_edw_tickets.py::test_multi_shield_and_coin_selection PASSED   [ 38%]
+tests/test_edw_tx_builder.py::test_eip1559_transaction_signing_and_recovery PASSED [ 41%]
+tests/test_edw_tx_builder.py::test_build_deposit_transaction PASSED      [ 44%]
+tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcast PASSED [ 47%]
+tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED       [ 50%]
+tests/test_merkle.py::test_merkle_tree_proofs PASSED                     [ 52%]
+tests/test_privacy_pools.py::test_privacy_pool_note PASSED               [ 55%]
+tests/test_privacy_pools.py::test_association_set PASSED                 [ 58%]
+tests/test_privacy_pools.py::test_privacy_pools_registry PASSED          [ 61%]
+tests/test_privacy_pools.py::test_saga_v2_event_and_ed25519_manifest_signature PASSED [ 63%]
+tests/test_privacy_pools.py::test_local_dir_sync_and_onchain_root_verification PASSED [ 66%]
+tests/test_railgun.py::test_railgun_0zk_bech32m_address_roundtrip PASSED [ 69%]
+tests/test_railgun.py::test_railgun_vault_operations_and_events PASSED   [ 72%]
+tests/test_stealth.py::test_stealth_keypair_derivation PASSED            [ 75%]
+tests/test_stealth.py::test_erc5564_scheme1_lifecycle PASSED             [ 77%]
+tests/test_tornado.py::test_tornado_note_creation_and_parsing PASSED     [ 80%]
+tests/test_tornado.py::test_tornado_pools PASSED                         [ 83%]
+tests/test_tornado.py::test_keychain_derivation PASSED                   [ 86%]
+tests/test_tornado.py::test_deposit_transactions PASSED                  [ 88%]
+tests/test_tornado.py::test_circuit_inputs_and_withdraw_transaction PASSED [ 91%]
+tests/test_tornado.py::test_relayer_registry_vault_and_ens_resolution PASSED [ 94%]
+tests/test_tornado.py::test_relayer_status_quote_and_auto_selection PASSED [ 97%]
+tests/test_tui.py::test_tui_app_mount_and_headless PASSED                [100%]
+
+============================== 36 passed in 4.81s ==============================
 ```
 
 ---
@@ -152,3 +266,4 @@ pytest -v
 ## License
 
 MIT License. Designed for privacy, sovereignty, and research.
+
