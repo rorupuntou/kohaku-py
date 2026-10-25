@@ -31,6 +31,12 @@ kohaku tui
   - Fast password updates rewrites only `header.json` without re-encrypting records.
 - **Privacy by Default & Fresh Address Rotation**:
   - Automatically derives and rotates unlinked virgin addresses along `m/44'/60'/x'/0/i` (`edw next-fresh-address`).
+- **Extended ETH Denominations & Multi-Shield Bundling**:
+  - Supports all 9 native ETH Tornado pools on Mainnet & Sepolia (`0.01`, `0.03`, `0.1`, `0.3`, `1`, `3`, `10`, `30`, `100` ETH) with greedy amount decomposition (`33.34 ETH` $\rightarrow$ `[30, 3, 0.3, 0.03, 0.01]`).
+  - **Dual Multi-Shield Engine (`edw shield`)**: Bundles multi-note deposits into a single atomic ERC-4337 v0.8 `UserOperation` (`Simple7702Account.executeBatch` + signed EIP-7702 authorization) while simultaneously generating sequential EIP-1559 raw transactions for zero-bundler P2P/Tor fallback.
+  - **Smart Coin Selection (`edw unshield`)**: Supports both `exact` denomination matching and largest-first `cover` note selection across held `MINED` notes.
+- **Encrypted Per-Network Service Registry (`edw network`)**:
+  - Manage per-chain RPC endpoints, ERC-4337 Bundlers, and Saga CDN Indexers inside the Argon2id + ChaCha20-Poly1305 blinded datastore.
 - **Gasless Unshielding (Relayer Cut)**:
   - Unshield directly to fresh virgin addresses with **0 ETH prior gas**. Relayers or block builders execute the withdrawal on L1 and are reimbursed directly from the note.
 - **Anonymous Invoices (`edw-invoice:v1:...`)**:
@@ -77,14 +83,24 @@ edw profile list
 edw next-fresh-address --peek  # peek without advancing
 edw next-fresh-address         # rotate and store cursor
 
-# 4. Create an anonymous payment request (Invoice)
-edw invoice new --amount 0.1 --label "Consulting"
-# Returns: edw-invoice:v1:1:ETH:0.1:0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc:0x...
+# 4. Multi-Shield arbitrary ETH amount (greedy decomposition + Dual EIP-7702 UserOp / EIP-1559)
+edw shield --amount 33.34 --label "Vault-Deposit"
 
-# 5. Check public and private spendable balances
+# 5. Unshield with automatic coin selection (cover or --exact)
+edw unshield --amount 3.31 --to 0xVirginRecipient... --exact
+
+# 6. Configure encrypted per-chain RPCs, ERC-4337 Bundlers, and Saga Indexer
+edw network view
+edw network bundler-add https://bundler.example.org/rpc
+
+# 7. Create an anonymous payment request (Invoice)
+edw invoice new --amount 0.03 --label "Consulting"
+# Returns: edw-invoice:v1:1:ETH:0.03:0x398971a7ae0fed4ae435f353ef00d3d4e4c18fd4:0x...
+
+# 8. Check public and private spendable balances
 edw balance --verbose
 
-# 6. Launch the interactive terminal UI
+# 9. Launch the interactive terminal UI
 edw tui
 ```
 
@@ -153,6 +169,7 @@ tests/test_crypto.py::test_mimc_constants PASSED
 tests/test_crypto.py::test_tornado_zero_value_propagation PASSED
 tests/test_crypto.py::test_poseidon PASSED
 tests/test_edw_cli.py::test_edw_cli_full_workflow PASSED
+tests/test_edw_cli.py::test_edw_cli_shield_unshield_and_network PASSED
 tests/test_edw_p2p.py::test_socks5_handshake_mock_server PASSED
 tests/test_edw_p2p.py::test_p2p_broadcaster_with_failover PASSED
 tests/test_edw_p2p.py::test_dispatch_gasless_withdrawal PASSED
@@ -161,9 +178,11 @@ tests/test_edw_storage.py::test_encrypted_database_disk_zero_leakage PASSED
 tests/test_edw_storage.py::test_keyring_manager_and_fresh_address_rotation PASSED
 tests/test_edw_tickets.py::test_ticket_draft_and_invoice_generation PASSED
 tests/test_edw_tickets.py::test_ticket_manager_encrypted_lifecycle PASSED
+tests/test_edw_tickets.py::test_multi_shield_and_coin_selection PASSED
 tests/test_edw_tx_builder.py::test_eip1559_transaction_signing_and_recovery PASSED
 tests/test_edw_tx_builder.py::test_build_deposit_transaction PASSED
 tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcast PASSED
+tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED
 tests/test_merkle.py::test_merkle_tree_proofs PASSED
 tests/test_privacy_pools.py::test_privacy_pool_note PASSED
 tests/test_privacy_pools.py::test_association_set PASSED
@@ -177,7 +196,7 @@ tests/test_tornado.py::test_deposit_transactions PASSED
 tests/test_tornado.py::test_circuit_inputs_and_withdraw_transaction PASSED
 tests/test_tui.py::test_tui_app_mount_and_headless PASSED
 
-============================== 27 passed in 4.02s ==============================
+============================== 30 passed in 8.03s ==============================
 ```
 
 ---
