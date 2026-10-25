@@ -119,3 +119,70 @@ def test_circuit_inputs_and_withdraw_transaction():
     assert tx.to == pool.contract_address
     assert tx.value == 0
     assert tx.data.startswith("0x21a0adb6")
+
+
+def test_relayer_registry_vault_and_ens_resolution(monkeypatch):
+    from kohaku.edw.p2p import P2PBroadcaster
+    from kohaku.sync.models import Event
+    from kohaku.tornado.relayers import (
+        RELAYER_REGISTERED_TOPIC,
+        RELAYER_REGISTRY_ADDRESS,
+        STAKE_BURNED_TOPIC,
+        RelayerRegistryVault,
+    )
+
+    reg_vault = RelayerRegistryVault()
+    # Real RelayerRegistered payload from block 0xd9737f (relayer-service.eth)
+    reg_ev = Event(
+        contract_address=RELAYER_REGISTRY_ADDRESS,
+        event_topic=RELAYER_REGISTERED_TOPIC,
+        topics=[RELAYER_REGISTERED_TOPIC],
+        data=(
+            "0xb60fb3b99e7206f890e586aa0b9fda9e859f4366eace809ee7de0edba56a2be9"
+            "0000000000000000000000000000000000000000000000000000000000000080"
+            "00000000000000000000000020bb3095a4852f4c97d7a188e9f7183c85acfc49"
+            "00000000000000000000000000000000000000000000001b1ae4d6e2ef500000"
+            "0000000000000000000000000000000000000000000000000000000000000013"
+            "72656c617965722d736572766963652e65746800000000000000000000000000"
+        ),
+        block_number=0xD9737F,
+        log_index=0xA8,
+    )
+    burn_ev = Event(
+        contract_address=RELAYER_REGISTRY_ADDRESS,
+        event_topic=STAKE_BURNED_TOPIC,
+        topics=[STAKE_BURNED_TOPIC],
+        data=(
+            "0x00000000000000000000000020bb3095a4852f4c97d7a188e9f7183c85acfc49"
+            "0000000000000000000000000000000000000000000000001ca9d2c10d11e12c"
+        ),
+        block_number=0xD9738F,
+        log_index=0xC,
+    )
+    reg_vault.ingest_event(reg_ev)
+    reg_vault.ingest_event(burn_ev)
+
+    active = reg_vault.active_relayers(min_stake_torn=100.0)
+    assert len(active) == 1
+    rel = active[0]
+    assert rel.ens_name == "relayer-service.eth"
+    assert rel.mainnet_subdomain == "mainnet-tornado.relayer-service.eth"
+    assert rel.relay_count == 1
+    assert 497.0 < rel.staked_torn <= 500.0
+    assert 2.0 < rel.burned_torn < 2.1
+
+    def fake_rpc(self, method, params=None):
+        data = params[0]["data"]
+        if data.startswith("0x0178b8bf"):
+            return "0x0000000000000000000000004976fb03c32e5b8cfe2b6ccb31c09ba78ebaba41"
+        if data.startswith("0x59d1d43c"):
+            return (
+                "0x0000000000000000000000000000000000000000000000000000000000000020"
+                "000000000000000000000000000000000000000000000000000000000000000d"
+                "6574682e72656c746f722e737500000000000000000000000000000000000000"
+            )
+        raise AssertionError(data)
+
+    monkeypatch.setattr(P2PBroadcaster, "rpc_call", fake_rpc)
+    url = RelayerRegistryVault.resolve_ens_url("reltor.eth", "http://127.0.0.1:8545")
+    assert url == "https://eth.reltor.su"

@@ -175,10 +175,33 @@ class P2PBroadcaster:
         peers: Optional[List[str]] = None,
         tor_proxy: Optional[str] = None,
         timeout: float = 12.0,
+        rpc_urls: Optional[List[str]] = None,
+        socks5_proxy: Optional[str] = None,
     ):
-        self.peers = peers or list(DEFAULT_BROADCAST_PEERS)
-        self.tor_proxy = tor_proxy
+        self.peers = peers or rpc_urls or list(DEFAULT_BROADCAST_PEERS)
+        self.tor_proxy = tor_proxy if tor_proxy is not None else socks5_proxy
         self.timeout = timeout
+
+    def rpc_call(self, method: str, params: Optional[List[Any]] = None) -> Any:
+        """Executes a JSON-RPC call across configured peers (with optional Tor SOCKS5 proxy)."""
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params or [],
+            "id": 1,
+        }
+        last_error = None
+        for peer in self.peers:
+            try:
+                res = post_json_rpc(peer, payload, proxy=self.tor_proxy, timeout=self.timeout)
+                if "result" in res:
+                    return res["result"]
+                if "error" in res:
+                    last_error = str(res["error"])
+            except Exception as e:
+                last_error = str(e)
+                continue
+        raise ConnectionError(f"Failed JSON-RPC {method} across all peers. Last error: {last_error}")
 
     def broadcast_raw_tx(self, raw_hex: str) -> BroadcastResult:
         """Attempts broadcast across peers in order until accepted."""

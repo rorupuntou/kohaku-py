@@ -63,6 +63,7 @@ class ProtocolInfo:
     metadata: dict[str, Any] = field(default_factory=dict)
     chunks: list[Chunk] = field(default_factory=list)
     hot_head: Chunk | None = None
+    extra_log_fields: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, protocol_id: str, data: dict[str, Any]) -> ProtocolInfo:
@@ -83,6 +84,7 @@ class ProtocolInfo:
             metadata=data.get("protocolMetadata", {}),
             chunks=chunks,
             hot_head=hot_head,
+            extra_log_fields=list(data.get("extraLogFields", [])),
         )
 
     @property
@@ -134,9 +136,11 @@ class Event:
     data: str
     block_number: int
     log_index: int
+    transaction_hash: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Event:
+        tx_hash = data.get("transactionHash")
         return cls(
             contract_address=data["contractAddress"].lower(),
             event_topic=data["eventTopic"].lower(),
@@ -144,10 +148,11 @@ class Event:
             data=data.get("data", "").lower(),
             block_number=parse_hex_int(data["blockNumber"]),
             log_index=parse_hex_int(data["logIndex"]),
+            transaction_hash=tx_hash.lower() if isinstance(tx_hash, str) else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "contractAddress": self.contract_address,
             "eventTopic": self.event_topic,
             "topics": self.topics,
@@ -155,3 +160,7 @@ class Event:
             "blockNumber": hex(self.block_number),
             "logIndex": hex(self.log_index),
         }
+        if self.transaction_hash is not None:
+            out["transactionHash"] = self.transaction_hash
+        return out
+
