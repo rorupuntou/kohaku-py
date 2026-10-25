@@ -10,8 +10,14 @@ from kohaku.crypto.poseidon import poseidon_hash
 RAILGUN_SMART_WALLET_MAINNET = "0xfa7093cdd9ee6932b4eb2c9e1cde7ce00b1fa4b9"
 
 SHIELD_TOPIC = "0x3a5b9dc26075a3801a6ddccf95fec485bb7500a91b44cec1add984c21ee6db3b"
+LEGACY_SHIELD_TOPICS = (
+    "0xf75eaa09da191ca634619d229eaa2a62f3f30b79ef6e9a0a2cb33ae1dc07d71c",
+    "0xc3821e11e71307afd1d94a490660178ff37aefdd3c0514e5dd08937bd7024f34",
+)
 TRANSACT_TOPIC = "0x56a618cda1e34057b7f849a5792f6c8587a2dbe11c83d0254e72cb3daffda7d1"
+LEGACY_TRANSACT_TOPIC = "0xc82d23263b236b692a8094d858e0831328f26cd9bcd5127d91c9299036cb9de9"
 NULLIFIED_TOPIC = "0x781745c57906dc2f175fec80a9c691744c91c48a34a83672c41c2604774eb11f"
+LEGACY_NULLIFIED_TOPIC = "0x78b6af109cf8ed292e957cdc2975e50bfd37995f5c38d35dc10e2ed0007cbd09"
 UNSHIELD_TOPIC = "0xd93cf895c7d5b2cd7dc7a098b678b3089f37d91f48d9b83a0800a91cbdf05284"
 
 RAILGUN_TREE_DEPTH = 16
@@ -29,6 +35,7 @@ KNOWN_MAINNET_TOKENS: dict[str, tuple[str, int]] = {
     "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": ("WBTC", 8),
     "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": ("wstETH", 18),
     "0xae78736cd615f374d3085123a210448e74fc6393": ("rETH", 18),
+    "0xe76c6c83af64e4c60245d8c7de953df673a7a33d": ("RAIL", 18),
 }
 
 
@@ -135,6 +142,18 @@ class RailgunShieldNote:
     @property
     def commitment_hex(self) -> str:
         return f"0x{self.commitment:064x}"
+
+    @property
+    def token_symbol(self) -> str:
+        info = KNOWN_MAINNET_TOKENS.get(self.token_address.lower())
+        return info[0] if info else self.token_address[:10]
+
+    @property
+    def decimal_amount(self) -> float:
+        info = KNOWN_MAINNET_TOKENS.get(self.token_address.lower())
+        decimals = info[1] if info else 18
+        return self.value / (10**decimals)
+
 
 
 @dataclass

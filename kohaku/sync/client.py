@@ -285,12 +285,17 @@ class SagaClient:
             if from_block is not None and chunk.to_block <= from_block:
                 continue
 
-            for event in self.stream_chunk_events(chunk):
-                if from_block is not None and event.block_number < from_block:
+            try:
+                for event in self.stream_chunk_events(chunk):
+                    if from_block is not None and event.block_number < from_block:
+                        continue
+                    if to_block is not None and event.block_number >= to_block:
+                        continue
+                    yield event
+            except ChunkDownloadError:
+                if chunk.is_hot and self.local_dir is not None:
                     continue
-                if to_block is not None and event.block_number >= to_block:
-                    continue
-                yield event
+                raise
 
     def export_sqlite(
         self,

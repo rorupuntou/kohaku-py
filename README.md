@@ -1,6 +1,6 @@
 # kohaku-py 🦊⚡
 
-Python privacy SDK & sovereign desktop wallet engine for Ethereum, bringing **Tornado Cash**, **Privacy Pools (0xBow)**, **ERC-5564 Stealth Addresses**, and the **Saga Sync** protocol to pure Python.
+Python privacy SDK & sovereign desktop wallet engine for Ethereum, bringing **Tornado Cash**, **Privacy Pools (0xBow)**, **Railgun (`0zk` UTXO Shielded Pool)**, **ERC-5564 Stealth Addresses**, and the **Saga Sync** protocol to pure Python.
 
 Companion implementation to the Ethereum Foundation's **[ethereum/kohaku](https://github.com/ethereum/kohaku)** (TypeScript), **[ethereum/kohaku-rs](https://github.com/ethereum/kohaku-rs)** (Rust), and **[ethereum/desktop-wallet](https://github.com/ethereum/desktop-wallet)**.
 
@@ -29,26 +29,27 @@ kohaku tui
   - Encrypted with **Argon2id** (64 MiB, 3 passes, 1 lane) and **ChaCha20-Poly1305** AEAD.
   - **Zero leakage on disk**: Record filenames are blinded with HKDF-SHA256 (`<blinded_hash>.bin`). An attacker inspecting disk sees zero accounts, zero notes, and zero history.
   - Fast password updates rewrites only `header.json` without re-encrypting records.
-- **Privacy by Default & Fresh Address Rotation**:
-  - Automatically derives and rotates unlinked virgin addresses along `m/44'/60'/x'/0/i` (`edw next-fresh-address`).
+- **3-Layer Resilient Sync & Offline-First Snapshots (`kohaku.sync`)**:
+  - **Offline-First Local Mode (`local_dir`)**: Reads pre-downloaded `.jsonl.gz` or decompressed `.jsonl` chunks directly from disk with zero network traffic.
+  - **Automatic 3-Mirror Failover**: Seamlessly fails over across `saga.gordosoluciones.xyz` $\rightarrow$ `saga-pp-state.global.ssl.fastly.net` $\rightarrow$ `storage.googleapis.com/pp-state`.
+  - **Direct L1 RPC Sync & On-Chain Root Verification**: Reconstructs Merkle trees directly from any Ethereum RPC node (`sync_from_rpc` via `eth_getLogs`) and verifies reconstructed Merkle roots against on-chain contracts (`isKnownRoot(bytes32)` on Tornado Cash; `currentRoot()` on 0xBow Privacy Pools).
+- **On-Chain Tornado Relayer Registry & Live `/v1/status` Quoting (`kohaku.tornado.relayers`)**:
+  - Reconstructs the on-chain `RelayerRegistry` (`0x58e8dcc13be9780fc42e8723d8ead4cf46943df2`), tracking `RelayerRegistered`, `StakeAddedToRelayer`, `StakeBurned`, and registered workers.
+  - Resolves live relayer endpoints via EIP-137 ENS `text(node, "url")` on `mainnet-tornado.<ensName>` and probes `/v1/status` over HTTPS or Tor SOCKS5 (`edw relayers --probe`, `edw unshield --auto-relayer`).
+- **Railgun Multi-Tree UTXO Engine & `0zk` Bech32m Addresses (`kohaku.railgun`)**:
+  - Pure-Python **Bech32m (`0x2bc830a3`)** encoder/decoder for 73-byte `0zk1qy...` shielded addresses (`edw railgun address`).
+  - Stateful multi-tree UTXO chainstate auditor (`RailgunVault`) supporting both Era 1 (`v1/v2.0`) and Era 2 (`v2.1+`) `RailgunSmartWallet` (`0xfa7093cdd9ee6932b4eb2c9e1cde7ce00b1fa4b9`) events (`Shield`, `Transact`, `Nullified`, `Unshield`) and pre-indexed `railgun-1-ops` `NxM` circuit topologies (`edw railgun audit`).
 - **Extended ETH Denominations & Multi-Shield Bundling**:
   - Supports all 9 native ETH Tornado pools on Mainnet & Sepolia (`0.01`, `0.03`, `0.1`, `0.3`, `1`, `3`, `10`, `30`, `100` ETH) with greedy amount decomposition (`33.34 ETH` $\rightarrow$ `[30, 3, 0.3, 0.03, 0.01]`).
   - **Dual Multi-Shield Engine (`edw shield`)**: Bundles multi-note deposits into a single atomic ERC-4337 v0.8 `UserOperation` (`Simple7702Account.executeBatch` + signed EIP-7702 authorization) while simultaneously generating sequential EIP-1559 raw transactions for zero-bundler P2P/Tor fallback.
   - **Smart Coin Selection (`edw unshield`)**: Supports both `exact` denomination matching and largest-first `cover` note selection across held `MINED` notes.
-- **Encrypted Per-Network Service Registry (`edw network`)**:
-  - Manage per-chain RPC endpoints, ERC-4337 Bundlers, and Saga CDN Indexers inside the Argon2id + ChaCha20-Poly1305 blinded datastore.
-- **Gasless Unshielding (Relayer Cut)**:
-  - Unshield directly to fresh virgin addresses with **0 ETH prior gas**. Relayers or block builders execute the withdrawal on L1 and are reimbursed directly from the note.
-- **Anonymous Invoices (`edw-invoice:v1:...`)**:
-  - Generate untraceable payment requests exposing only public commitments. Third parties fund the ticket on Ethereum L1, and only you can withdraw it.
-- **Sovereign Mempool & Tor / SOCKS5 Tunneling**:
-  - Native RFC 1928 SOCKS5 client in pure Python. Route transactions and RPCs through Tor (`127.0.0.1:9050`) to eliminate IP tracking.
-  - Multi-peer failover broadcaster (`P2PBroadcaster`).
+- **Anonymous Invoices (`edw-invoice:v1:...`) & Tor / SOCKS5 Tunneling**:
+  - Native RFC 1928 SOCKS5 client in pure Python (`--tor-proxy 127.0.0.1:9050`).
 - **ZK Cryptography & Protocols**:
   - Pure Python BN254 scalar field arithmetic modulo $p$.
   - 220-round canonical MiMC-7 Sponge matching Tornado Cash on-chain contracts.
-  - Circomlib-compatible Poseidon for 0xBow Privacy Pools.
-  - 20-level binary Merkle Tree with proof verification.
+  - Circomlib-compatible Poseidon for 0xBow Privacy Pools and Railgun UTXO commitments.
+  - 20-level binary Merkle Tree, LeanIMT (Privacy Pools), and 16-level multi-tree UTXO tracking (Railgun).
   - ERC-5564 Scheme 1 Stealth Meta-Addresses with secp256k1 ECDH.
 
 ---
@@ -73,88 +74,69 @@ nix develop
 ## EDW CLI Quickstart
 
 ```bash
-# 1. Create a new encrypted wallet profile
+# 1. Create a new encrypted wallet profile & rotate virgin addresses
 edw profile new --name cypherpunk
+edw next-fresh-address --peek
 
-# 2. View profiles
-edw profile list
-
-# 3. Get next unlinked virgin address
-edw next-fresh-address --peek  # peek without advancing
-edw next-fresh-address         # rotate and store cursor
-
-# 4. Multi-Shield arbitrary ETH amount (greedy decomposition + Dual EIP-7702 UserOp / EIP-1559)
+# 2. Multi-Shield arbitrary ETH amount (greedy decomposition + Dual EIP-7702 UserOp / EIP-1559)
 edw shield --amount 33.34 --label "Vault-Deposit"
 
-# 5. Unshield with automatic coin selection (cover or --exact)
-edw unshield --amount 3.31 --to 0xVirginRecipient... --exact
+# 3. Probe live on-chain Tornado Cash Relayers (/v1/status) & auto-select lowest fee on unshield
+edw relayers --probe
+edw unshield --amount 3.31 --to 0xVirginRecipient... --exact --auto-relayer
 
-# 6. Configure encrypted per-chain RPCs, ERC-4337 Bundlers, and Saga Indexer
+# 4. Encode / decode Railgun 0zk1... Bech32m addresses & audit Railgun UTXO chainstate
+edw railgun address --decode 0zk1qy...
+edw railgun audit --local-dir /path/to/saga-snapshots
+
+# 5. Configure encrypted per-chain RPCs, ERC-4337 Bundlers, and Saga Indexer
 edw network view
 edw network bundler-add https://bundler.example.org/rpc
 
-# 7. Create an anonymous payment request (Invoice)
+# 6. Create an anonymous payment request (Invoice)
 edw invoice new --amount 0.03 --label "Consulting"
-# Returns: edw-invoice:v1:1:ETH:0.03:0x398971a7ae0fed4ae435f353ef00d3d4e4c18fd4:0x...
 
-# 8. Check public and private spendable balances
-edw balance --verbose
-
-# 9. Launch the interactive terminal UI
+# 7. Launch the interactive terminal UI
 edw tui
 ```
 
 ---
 
-## Python SDK Quickstart
+## Empirical Ethereum L1 Privacy Protocol Audit
 
-### 1. Offline EIP-1559 Transaction Signing & Gasless Withdraw
+Using `kohaku-py`'s offline snapshot engine across the complete Saga state index, `kohaku-py` reproduces and verifies the full on-chain state of all three major Ethereum L1 ZK privacy protocols:
 
-```python
-from kohaku.edw.tx_builder import TransactionBuilder
-from kohaku.edw.tickets import Ticket
+### 1. Tornado Cash On-Chain Relayer Registry (`0x58e8dcc13be9780fc42e8723d8ead4cf46943df2`)
+- **Total Indexed Registry Events**: `164,887` (`124` registered relayers, `160,214` `StakeBurned` withdrawal relays).
+- **Live Mainnet Relayers Verified via ENS (`mainnet-tornado.<ens>`) & `/v1/status`**:
+  - `00relayer.eth` (`https://eth.00relayer.xyz`) — **0.360% fee** (`17,096.47 TORN` staked)
+  - `safe-torn.eth` (`https://eth3.safetorn.ovh`) — **0.385% fee** (`26,388.00 TORN` staked)
+  - `dieguis-and-martis.eth` (`https://mainnet.dieguis-and-martis.xyz`) — **0.390% fee** (`993.69 TORN` staked)
+  - `tor-relay.eth` (`https://tor.fakkk.vin`) — **0.400% fee** (`1,464.19 TORN` staked)
+  - `sky-relayer.eth` (`https://sky-relayer.xyz`) — **0.430% fee** (`14,083.79 TORN` staked)
+  - `reltor.eth` (`https://eth.reltor.su`) — **0.460% fee** (`5,714.80 TORN` staked)
 
-# Create an offline draft note
-ticket = Ticket.create_draft(currency="ETH", amount="1", chain_id=1)
+### 2. Railgun Smart Wallet (`0xfa7093cdd9ee6932b4eb2c9e1cde7ce00b1fa4b9`) Stateful UTXO Audit
+- **Total Indexed UTXO Operations (`railgun-1-ops`)**: `144,326` (`131,284` shielded UTXO state transitions + `13,042` pure L1 unshields tagged with sentinel tree `0x1869f` / `99999`).
+- **Multi-Tree Merkle State (Depth 16 = $65,536$ leaves/tree)**:
+  - Trees `0`, `1`, `2`, `3`: **100% full** (`65,536` leaves each)
+  - Tree `4` (active): **`30,961` leaves** (~47.2% capacity)
+  - **Total UTXO Leaves Allocated**: `293,107` (`73,451` L1 `Shield` deposit notes + `219,656` `Transact` notes)
+  - **Total Nullifiers Burned**: `256,451`
+  - **Active Unspent UTXO Set**: **`36,656` live shielded UTXOs**
+- **Dominant `NxM` Groth16 Circuit Topologies**:
+  - `1x2`: `50,201` ops (34.8%) | `1x3`: `43,514` ops (30.1%) | `1x1`: `12,765` ops (8.8%) | `2x3`: `11,855` ops (8.2%) | `2x2`: `8,909` ops (6.2%) | `10x1` consolidation: `5,669` ops (3.9%).
+- **Cumulative L1 Token Flows (`73,451` Shields vs. `103,689` Unshields across 50 chunks)**:
 
-# Build a gasless withdrawal payload
-payload = TransactionBuilder.build_gasless_withdraw_payload(
-    ticket=ticket,
-    recipient_address="0xVirginAddress...",
-    merkle_root="0xRoot...",
-    proof_bytes=proof_bytes,
-    relayer_address="0xRelayerNode...",
-    relayer_fee_eth=0.01,
-)
-print("Calldata ready:", payload.calldata)
-print("Net ETH received by recipient:", payload.net_recipient_eth)
-```
-
-### 2. Encrypted Blinded Datastore
-
-```python
-from kohaku.edw.storage.database import EncryptedDatabase
-
-# Open encrypted store
-db = EncryptedDatabase.open("~/.edw/1", password="my-password")
-
-# Write confidential key material (filename on disk is completely blinded)
-db.set("vault:tornado", "note:0", b"secret-payload")
-
-# Read back
-secret = db.get("vault:tornado", "note:0")
-```
-
-### 3. Generate & Inspect Tornado Cash Notes
-
-```python
-from kohaku.tornado import TornadoNote, TornadoVault
-
-note = TornadoNote.create(currency="ETH", amount="0.1", chain_id=1)
-print("Note URI:", note.to_note_string())
-print("Deposit Commitment:", note.commitment_hex)
-print("Withdrawal Nullifier Hash:", note.nullifier_hash_hex)
-```
+| Asset | Total Shielded In | Total Unshielded Out | Net Retained in Pool (TVL) |
+| :--- | ---: | ---: | ---: |
+| **WETH** | `620,351.09 WETH` | `593,084.80 WETH` | **`27,266.30 WETH`** |
+| **USDT** | `420,256,889.84 USDT` | `389,307,641.36 USDT` | **`30,949,248.48 USDT`** |
+| **USDC** | `314,270,980.04 USDC` | `290,043,982.05 USDC` | **`24,226,997.99 USDC`** |
+| **DAI** | `203,924,567.61 DAI` | `196,669,965.79 DAI` | **`7,254,601.82 DAI`** |
+| **WBTC** | `525.40 WBTC` | `490.95 WBTC` | **`34.45 WBTC`** |
+| **wstETH** | `194.82 wstETH` | `48.61 wstETH` | **`146.21 wstETH`** |
+| **RAIL** | `3,902,017.20 RAIL` | `3,409,424.78 RAIL` | **`492,592.42 RAIL`** |
 
 ---
 
@@ -162,41 +144,7 @@ print("Withdrawal Nullifier Hash:", note.nullifier_hash_hex)
 
 ```bash
 pytest -v
-```
-
-```
-tests/test_crypto.py::test_mimc_constants PASSED
-tests/test_crypto.py::test_tornado_zero_value_propagation PASSED
-tests/test_crypto.py::test_poseidon PASSED
-tests/test_edw_cli.py::test_edw_cli_full_workflow PASSED
-tests/test_edw_cli.py::test_edw_cli_shield_unshield_and_network PASSED
-tests/test_edw_p2p.py::test_socks5_handshake_mock_server PASSED
-tests/test_edw_p2p.py::test_p2p_broadcaster_with_failover PASSED
-tests/test_edw_p2p.py::test_dispatch_gasless_withdrawal PASSED
-tests/test_edw_storage.py::test_blinded_cipher_lifecycle PASSED
-tests/test_edw_storage.py::test_encrypted_database_disk_zero_leakage PASSED
-tests/test_edw_storage.py::test_keyring_manager_and_fresh_address_rotation PASSED
-tests/test_edw_tickets.py::test_ticket_draft_and_invoice_generation PASSED
-tests/test_edw_tickets.py::test_ticket_manager_encrypted_lifecycle PASSED
-tests/test_edw_tickets.py::test_multi_shield_and_coin_selection PASSED
-tests/test_edw_tx_builder.py::test_eip1559_transaction_signing_and_recovery PASSED
-tests/test_edw_tx_builder.py::test_build_deposit_transaction PASSED
-tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcast PASSED
-tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED
-tests/test_merkle.py::test_merkle_tree_proofs PASSED
-tests/test_privacy_pools.py::test_privacy_pool_note PASSED
-tests/test_privacy_pools.py::test_association_set PASSED
-tests/test_privacy_pools.py::test_privacy_pools_registry PASSED
-tests/test_stealth.py::test_stealth_keypair_derivation PASSED
-tests/test_stealth.py::test_erc5564_scheme1_lifecycle PASSED
-tests/test_tornado.py::test_tornado_note_creation_and_parsing PASSED
-tests/test_tornado.py::test_tornado_pools PASSED
-tests/test_tornado.py::test_keychain_derivation PASSED
-tests/test_tornado.py::test_deposit_transactions PASSED
-tests/test_tornado.py::test_circuit_inputs_and_withdraw_transaction PASSED
-tests/test_tui.py::test_tui_app_mount_and_headless PASSED
-
-============================== 30 passed in 8.03s ==============================
+# ============================== 36 passed in 4.48s ==============================
 ```
 
 ---

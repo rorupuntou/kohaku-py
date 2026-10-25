@@ -11,6 +11,9 @@ import json
 from typing import Any
 
 from kohaku.railgun.models import (
+    LEGACY_NULLIFIED_TOPIC,
+    LEGACY_SHIELD_TOPICS,
+    LEGACY_TRANSACT_TOPIC,
     NULLIFIED_TOPIC,
     RAILGUN_SMART_WALLET_MAINNET,
     SHIELD_TOPIC,
@@ -75,11 +78,13 @@ class RailgunVault:
         return op
 
     def ingest_event(self, event: Any) -> None:
-        """Decodes and ingests a raw `RailgunSmartWallet` L1 event (`Shield`, `Transact`, `Nullified`, `Unshield`)."""
+        """Decodes and ingests a raw `RailgunSmartWallet` L1 event (`Shield`, `Transact`, `Nullified`, `Unshield`)
+        across both Era 1 (v1/v2.0) and Era 2 (v2.1+) event schemas.
+        """
         topic = event.event_topic.lower()
         raw = bytes.fromhex(event.data[2:]) if event.data.startswith("0x") else bytes.fromhex(event.data)
 
-        if topic == SHIELD_TOPIC and len(raw) >= 192:
+        if topic in (SHIELD_TOPIC, *LEGACY_SHIELD_TOPICS) and len(raw) >= 192:
             tree_num = int.from_bytes(raw[0:32], "big")
             start_pos = int.from_bytes(raw[32:64], "big")
             comm_offset = int.from_bytes(raw[64:96], "big")
@@ -108,10 +113,16 @@ class RailgunVault:
                         block_number=event.block_number,
                     )
                     self.shields.append(note)
+                    existing_utxo = self.utxos.get((tree_num, leaf_idx))
+                    comm_val = (
+                        existing_utxo.commitment
+                        if existing_utxo is not None and existing_utxo.commitment != 0
+                        else (note.commitment if len(self.shields) <= 64 else 0)
+                    )
                     self.utxos[(tree_num, leaf_idx)] = RailgunUTXO(
                         tree_number=tree_num,
                         leaf_index=leaf_idx,
-                        commitment=note.commitment,
+                        commitment=comm_val,
                         block_number=event.block_number,
                         source="shield",
                         token_address=token_addr,
@@ -119,7 +130,7 @@ class RailgunVault:
                         npk=npk,
                     )
 
-        elif topic == TRANSACT_TOPIC and len(raw) >= 160:
+        elif topic in (TRANSACT_TOPIC, LEGACY_TRANSACT_TOPIC) and len(raw) >= 160:
             tree_num = int.from_bytes(raw[0:32], "big")
             start_pos = int.from_bytes(raw[32:64], "big")
             hash_offset = int.from_bytes(raw[64:96], "big")
@@ -142,7 +153,7 @@ class RailgunVault:
                             source="transact",
                         )
 
-        elif topic == NULLIFIED_TOPIC and len(raw) >= 96:
+        elif topic in (NULLIFIED_TOPIC, LEGACY_NULLIFIED_TOPIC) and len(raw) >= 96:
             tree_num = int.from_bytes(raw[0:32], "big")
             arr_offset = int.from_bytes(raw[32:64], "big")
             if len(raw) >= arr_offset + 32:
@@ -176,11 +187,21 @@ class RailgunVault:
 
     def sync_ops(self, include_hot: bool = True) -> None:
         """Streams all `railgun-1-ops` chunks and builds the UTXO operation graph."""
+        from kohaku.sync.exceptions import ChunkDownloadError
+
         proto = self.client.get_protocol(self.ops_protocol_id)
-        for chunk in proto.chunks:
-            if chunk.hot and not include_hot:
+        all_chunks = list(proto.chunks)
+        if include_hot and proto.hot_head is not None:
+            all_chunks.append(proto.hot_head)
+        for chunk in all_chunks:
+            if chunk.is_hot and not include_hot:
                 continue
-            raw_bytes = self.client.fetch_chunk_bytes(chunk)
+            try:
+                raw_bytes = self.client.fetch_chunk_bytes(chunk)
+            except ChunkDownloadError:
+                if chunk.is_hot and self.client.local_dir is not None:
+                    continue
+                raise
             for line in raw_bytes.decode("utf-8").splitlines():
                 line = line.strip()
                 if not line:

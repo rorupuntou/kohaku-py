@@ -309,6 +309,80 @@ def cmd_unshield(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_railgun_address(args: argparse.Namespace) -> int:
+    from kohaku.railgun import RailgunAddress
+
+    if args.decode:
+        dec = RailgunAddress.from_0zk(args.decode)
+        print("════════════════════════════════════════════════════════════════════════════")
+        print("                   RAILGUN 0zk BECH32M ADDRESS DECODED                      ")
+        print("════════════════════════════════════════════════════════════════════════════")
+        print(f"Address:             {args.decode}")
+        print(f"Version:             {dec.version}")
+        print(f"Master Public Key:   0x{dec.master_public_key:064x}")
+        print(f"Viewing Public Key:  0x{dec.viewing_public_key.hex()}")
+        print(f"Network Chain:       type={dec.chain_type}, chain_id={dec.chain_id}")
+        print("════════════════════════════════════════════════════════════════════════════")
+        return 0
+
+    if not args.mpk or not args.vpk:
+        raise ValueError("Provide either --decode <0zk1...> or both --mpk <hex> and --vpk <hex>")
+    mpk_int = int(args.mpk, 16)
+    vpk_clean = args.vpk[2:] if args.vpk.startswith("0x") else args.vpk
+    vpk_bytes = bytes.fromhex(vpk_clean.zfill(64))
+    rg = RailgunAddress(
+        master_public_key=mpk_int,
+        viewing_public_key=vpk_bytes,
+        chain_type=0,
+        chain_id=args.chain_id,
+    )
+    print(rg.to_0zk())
+    return 0
+
+
+def cmd_railgun_audit(args: argparse.Namespace) -> int:
+    from collections import Counter
+    from kohaku.railgun import KNOWN_MAINNET_TOKENS, RailgunVault
+    from kohaku.sync.client import SagaClient
+
+    client = SagaClient(local_dir=args.local_dir, verify_checksum=False)
+    vault = RailgunVault(client=client)
+    vault.sync_ops(include_hot=True)
+    if not args.skip_events:
+        vault.sync_events(include_hot=True)
+
+    summary = vault.utxo_audit_summary()
+    print("════════════════════════════════════════════════════════════════════════════")
+    print("             RAILGUN L1 STATEFUL UTXO & MERKLE TREE AUDIT                   ")
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"Contract Address:    {summary['contract']}")
+    print(f"Total Operations:    {summary['operations_count']:,} ({summary['shielded_utxo_ops_count']:,} shielded, {summary['pure_unshield_ops_count']:,} pure unshields)")
+    print(f"Merkle Trees (d=16): {summary['trees_count']} active trees -> {summary['tree_leaves_allocated']}")
+    print(f"Total UTXO Leaves:   {summary['total_tree_leaves_allocated']:,}")
+    print(f"Nullifiers Burned:   {summary['total_nullifiers_burned']:,}")
+    print(f"Active Unspent Set:  {summary['net_active_utxos_estimate']:,} live UTXOs")
+    print(f"Top NxM Topologies:  {summary['top_circuit_topologies']}")
+    if not args.skip_events:
+        print(f"Decoded L1 Shields:  {summary['shields_decoded']:,} deposit notes")
+        print(f"Decoded L1 Unshield: {summary['unshields_decoded']:,} withdrawals")
+        sh_vol: Counter[str] = Counter()
+        un_vol: Counter[str] = Counter()
+        for s in vault.shields:
+            if s.token_address in KNOWN_MAINNET_TOKENS:
+                sh_vol[s.token_symbol] += s.decimal_amount
+        for u in vault.unshields:
+            if u.token_address in KNOWN_MAINNET_TOKENS:
+                un_vol[u.token_symbol] += u.decimal_amount
+        print("\n--- MAJOR TOKEN FLOWS (SHIELD IN vs UNSHIELD OUT) ---")
+        for sym in ("WETH", "USDT", "USDC", "DAI", "WBTC", "wstETH", "rETH", "RAIL"):
+            if sh_vol[sym] > 0 or un_vol[sym] > 0:
+                net_pool = max(0.0, sh_vol[sym] - un_vol[sym])
+                print(
+                    f"  • {sym:<7} | Shielded In: {sh_vol[sym]:>15,.2f} | Unshielded Out: {un_vol[sym]:>15,.2f} | Net Retained: {net_pool:>14,.2f}"
+                )
+    print("════════════════════════════════════════════════════════════════════════════")
+    return 0
+
 
 def cmd_network(args: argparse.Namespace) -> int:
     db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
@@ -435,6 +509,21 @@ def main() -> None:
     rel_p = subparsers.add_parser("relayers", help="List and probe active on-chain Tornado Cash relayers")
     rel_p.add_argument("--probe", action="store_true", help="Query live /v1/status endpoints for fee & health quotes")
     rel_p.set_defaults(func=cmd_relayers)
+
+    # railgun (0zk Bech32m addresses & stateful UTXO multi-tree auditor)
+    rg_p = subparsers.add_parser("railgun", help="Railgun 0zk Bech32m utilities and UTXO chainstate auditor")
+    rg_sub = rg_p.add_subparsers(dest="rg_action", required=True)
+
+    rg_addr = rg_sub.add_parser("address", help="Encode or decode a Railgun 0zk1... Bech32m address")
+    rg_addr.add_argument("--decode", help="Decode an existing 0zk1... address")
+    rg_addr.add_argument("--mpk", help="Master Public Key (32-byte hex) to encode")
+    rg_addr.add_argument("--vpk", help="Viewing Public Key (32-byte hex) to encode")
+    rg_addr.set_defaults(func=cmd_railgun_address)
+
+    rg_audit = rg_sub.add_parser("audit", help="Run stateful UTXO & Shield/Unshield audit on Railgun snapshots")
+    rg_audit.add_argument("--local-dir", type=Path, help="Local directory with pre-downloaded Saga snapshots")
+    rg_audit.add_argument("--skip-events", action="store_true", help="Audit only railgun-1-ops without smartwallet events")
+    rg_audit.set_defaults(func=cmd_railgun_audit)
 
 
     # network (encrypted per-chain RPC, Bundler, and Saga Indexer registry)
