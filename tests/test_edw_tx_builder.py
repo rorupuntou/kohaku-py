@@ -102,3 +102,34 @@ def test_gasless_withdraw_payload_and_relayer_broadcast():
     # Verify consensus validity of relayer tx
     recovered_relayer = Account.recover_transaction(relayer_tx.raw_hex)
     assert recovered_relayer.lower() == relayer.address.lower()
+
+
+def test_dual_multi_shield_bundle():
+    from kohaku.edw.tx_builder import SIMPLE_7702_ACCOUNT_ADDRESS
+
+    depositor = Account.create()
+    tickets = [
+        Ticket.create_draft(currency="ETH", amount="1", chain_id=1),
+        Ticket.create_draft(currency="ETH", amount="0.3", chain_id=1),
+        Ticket.create_draft(currency="ETH", amount="0.01", chain_id=1),
+    ]
+
+    bundle = TransactionBuilder.build_multi_shield_bundle(
+        tickets=tickets,
+        private_key=depositor.key,
+        start_nonce=7,
+    )
+
+    assert bundle.total_eth_str == "1.31"
+    assert len(bundle.eip1559_txs) == 3
+    assert [tx.nonce for tx in bundle.eip1559_txs] == [7, 8, 9]
+    for tx in bundle.eip1559_txs:
+        assert Account.recover_transaction(tx.raw_hex).lower() == depositor.address.lower()
+
+    assert bundle.user_operation is not None
+    assert bundle.user_operation.sender.lower() == depositor.address.lower()
+    assert bundle.user_operation.call_data.startswith("0x34fcd5be")  # executeBatch selector
+    assert bundle.user_operation.authorization is not None
+    assert bundle.user_operation.authorization.address == SIMPLE_7702_ACCOUNT_ADDRESS
+    assert bundle.user_operation.authorization.designator_bytecode().startswith(bytes.fromhex("ef0100"))
+

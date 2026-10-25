@@ -94,3 +94,71 @@ def test_edw_cli_full_workflow(tmp_path: Path, capsys):
     captured = capsys.readouterr().out
     assert "EDW-PY SOVEREIGN WALLET HOLDINGS" in captured
     assert "Pending Invoices:    1 draft ticket(s)" in captured
+
+
+def test_edw_cli_shield_unshield_and_network(tmp_path: Path, capsys):
+    from eth_account import Account
+    from kohaku.edw.cli import (
+        cmd_network,
+        cmd_shield,
+        cmd_unshield,
+        open_or_init_database,
+    )
+    from kohaku.edw.tickets import TicketManager
+
+    data_dir = tmp_path / "edw_shield_data"
+    chain_id = 1
+    password = "test-master-key"
+    payer = Account.create()
+
+    # 1. Multi-Shield 1.31 ETH -> [1, 0.3, 0.01]
+    args_sh = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        amount="1.31",
+        label="BatchShield",
+        private_key=payer.key.hex(),
+        nonce=3,
+    )
+    ret = cmd_shield(args_sh)
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "Decomposed Notes:    3 note(s)" in out
+    assert "ERC-4337 UserOpHash:" in out
+    assert "Nonce #3:" in out
+    assert "Nonce #5:" in out
+
+    # Mark the 3 created tickets as MINED and run cmd_unshield
+    db = open_or_init_database(data_dir, chain_id, password=password)
+    tm = TicketManager(db, profile_m=0, profile_x=0)
+    for idx, t in enumerate(tm.list_tickets()):
+        tm.mark_mined(t.commitment_hex, leaf_index=idx, block_number=26200000 + idx)
+
+    args_un = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        amount="1.01",
+        to="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        exact=True,
+    )
+    ret = cmd_unshield(args_un)
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "EXACT MATCH" in out
+    assert "Selected Notes (2): 1.0100 ETH total" in out
+
+    # 3. Network service management
+    args_net = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        net_action="bundler-add",
+        url="https://bundler.example.org/rpc",
+    )
+    ret = cmd_network(args_net)
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "https://bundler.example.org/rpc" in out
+

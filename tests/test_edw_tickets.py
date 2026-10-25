@@ -88,3 +88,28 @@ def test_ticket_manager_encrypted_lifecycle(tmp_path: Path):
     by_null = tm.get_ticket_by_nullifier_hash(t1.nullifier_hash_hex)
     assert by_null is not None
     assert by_null.state == TicketState.SPENT
+
+
+def test_multi_shield_and_coin_selection(tmp_path: Path):
+    from kohaku.tornado.pools import parse_eth
+
+    db = EncryptedDatabase.initialize(tmp_path / "multi_shield_store", "pass123")
+    tm = TicketManager(db, profile_m=0, profile_x=0)
+
+    # Create 33.34 ETH multi-shield -> [30, 3, 0.3, 0.03, 0.01]
+    tickets = tm.create_multi_shield_tickets(parse_eth("33.34"), chain_id=1)
+    assert [t.amount for t in tickets] == ["30", "3", "0.3", "0.03", "0.01"]
+
+    # Mark all 5 mined
+    for idx, t in enumerate(tickets):
+        tm.mark_mined(t.commitment_hex, leaf_index=idx, block_number=26200000 + idx)
+
+    # Exact match for 3.31 ETH -> [3, 0.3, 0.01]
+    exact = tm.select_exact_tickets(parse_eth("3.31"), currency="ETH", chain_id=1)
+    assert [t.amount for t in exact] == ["3", "0.3", "0.01"]
+
+    # Cover match for 3.005 ETH (takes 3 ETH + smallest remaining >= 0.005 -> 0.01 ETH)
+    covered = tm.select_cover_tickets(parse_eth("3.005"), currency="ETH", chain_id=1)
+    assert [t.amount for t in covered] == ["3", "0.01"]
+
+

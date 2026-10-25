@@ -1,7 +1,13 @@
 from kohaku.crypto.bn254 import P
 from kohaku.tornado.circuit import CircuitInputs, solidity_proof_from_snarkjs
 from kohaku.tornado.note import TornadoNote
-from kohaku.tornado.pools import MAINNET_POOLS, get_pool
+from kohaku.tornado.pools import (
+    MAINNET_POOLS,
+    SEPOLIA_POOLS,
+    decompose_eth_amount,
+    get_pool,
+    parse_eth,
+)
 from kohaku.tornado.withdraw import build_withdraw_transaction
 
 
@@ -32,6 +38,16 @@ def test_tornado_pools():
     assert pool.asset == "ETH"
     assert pool.amount == "0.1"
     assert pool.contract_address == "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc"
+
+    # Extended ETH pools (EDW PR #111)
+    for amt in ("0.01", "0.03", "0.3", "3", "30"):
+        assert f"tornado-cash-1-eth-{amt}" in MAINNET_POOLS
+        assert f"tornado-cash-11155111-eth-{amt}" in SEPOLIA_POOLS
+
+    # Greedy amount decomposition: 33.34 ETH -> [30, 3, 0.3, 0.03, 0.01]
+    pools = decompose_eth_amount(parse_eth("33.34"), chain_id=1)
+    assert [p.amount for p in pools] == ["30", "3", "0.3", "0.03", "0.01"]
+
 
 
 def test_keychain_derivation():

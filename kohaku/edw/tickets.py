@@ -21,7 +21,7 @@ from typing import Any, List, Optional
 
 from kohaku.edw.storage.database import EncryptedDatabase
 from kohaku.tornado.note import TornadoNote
-from kohaku.tornado.pools import ALL_POOLS, get_pool
+from kohaku.tornado.pools import ALL_POOLS, decompose_eth_amount, get_pool
 from kohaku.tornado.tx import build_deposit_transactions
 
 
@@ -162,6 +162,10 @@ class Ticket:
             commitment=self.commitment_hex,
         )
 
+    @property
+    def amount_wei(self) -> int:
+        return get_pool(self.pool_id).amount_wei
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["state"] = self.state.value
@@ -211,6 +215,26 @@ class TicketManager:
         self.save_ticket(ticket)
         return ticket
 
+    def create_multi_shield_tickets(
+        self,
+        amount_wei: int,
+        chain_id: int = 1,
+        label: str = "Multi-Shield",
+    ) -> List[Ticket]:
+        """Decompose `amount_wei` into native ETH pools and create & save draft tickets."""
+        pools = decompose_eth_amount(amount_wei, chain_id=chain_id)
+        created: List[Ticket] = []
+        for idx, pool in enumerate(pools):
+            note_label = f"{label} ({idx + 1}/{len(pools)}: {pool.amount} ETH)"
+            ticket = self.create_draft_ticket(
+                currency=pool.asset,
+                amount=pool.amount,
+                chain_id=pool.chain_id,
+                label=note_label,
+            )
+            created.append(ticket)
+        return created
+
     def list_tickets(self, state: Optional[TicketState] = None) -> List[Ticket]:
         ids = self._get_ticket_ids()
         tickets = []
@@ -220,6 +244,79 @@ class TicketManager:
                 if state is None or t.state == state:
                     tickets.append(t)
         return tickets
+
+    def select_exact_tickets(
+        self, amount_wei: int, currency: str = "ETH", chain_id: Optional[int] = None
+    ) -> List[Ticket]:
+        """Select unspent MINED tickets whose denominations sum exactly to `amount_wei` (largest first).
+
+        Matches `edw_core::vault::tornadocash::exact_notes`.
+        """
+        if amount_wei <= 0:
+            raise ValueError("Amount must be greater than zero")
+
+        available = [
+            t
+            for t in self.list_tickets(state=TicketState.MINED)
+            if t.currency.upper() == currency.upper()
+            and (chain_id is None or t.chain_id == chain_id)
+        ]
+        available.sort(key=lambda t: t.amount_wei, reverse=True)
+
+        remaining = amount_wei
+        chosen: List[Ticket] = []
+        for t in list(available):
+            if t.amount_wei <= remaining:
+                chosen.append(t)
+                remaining -= t.amount_wei
+                if remaining == 0:
+                    break
+
+        if remaining != 0:
+            raise ValueError(
+                f"Held MINED notes cannot make {amount_wei} wei exactly (short by {remaining} wei)"
+            )
+        return chosen
+
+    def select_cover_tickets(
+        self, amount_wei: int, currency: str = "ETH", chain_id: Optional[int] = None
+    ) -> List[Ticket]:
+        """Select the smallest largest-first set of unspent MINED tickets covering at least `amount_wei`.
+
+        Whole denominations are taken largest first; any remainder takes the smallest held note
+        that covers it. Matches `edw_core::vault::tornadocash::cover_notes`.
+        """
+        if amount_wei <= 0:
+            raise ValueError("Amount must be greater than zero")
+
+        available = [
+            t
+            for t in self.list_tickets(state=TicketState.MINED)
+            if t.currency.upper() == currency.upper()
+            and (chain_id is None or t.chain_id == chain_id)
+        ]
+        available.sort(key=lambda t: t.amount_wei, reverse=True)
+
+        remaining = amount_wei
+        chosen: List[Ticket] = []
+        leftover: List[Ticket] = []
+        for t in available:
+            if t.amount_wei <= remaining and remaining > 0:
+                chosen.append(t)
+                remaining -= t.amount_wei
+            else:
+                leftover.append(t)
+
+        if remaining == 0:
+            return chosen
+
+        leftover.sort(key=lambda t: t.amount_wei)
+        for extra in leftover:
+            if extra.amount_wei >= remaining:
+                chosen.append(extra)
+                return chosen
+
+        raise ValueError(f"Held MINED notes cannot cover {amount_wei} wei")
 
     def get_ticket_by_commitment(self, commitment_hex: str) -> Optional[Ticket]:
         clean = commitment_hex.lower()

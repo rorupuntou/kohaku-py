@@ -19,13 +19,14 @@ from typing import Optional
 from eth_account import Account
 import rlp
 
+from kohaku.edw.network import NetworkConfigManager
 from kohaku.edw.p2p import P2PBroadcaster
 from kohaku.edw.storage.cipher import InvalidPasswordError
 from kohaku.edw.storage.database import EncryptedDatabase
 from kohaku.edw.storage.keyring import KeyringManager
 from kohaku.edw.tickets import TicketInvoice, TicketManager, TicketState
 from kohaku.edw.tx_builder import TransactionBuilder
-from kohaku.tornado.pools import MAINNET_POOLS, get_pool
+from kohaku.tornado.pools import MAINNET_POOLS, get_pool, parse_eth
 
 
 def get_default_data_dir() -> Path:
@@ -195,6 +196,113 @@ def cmd_invoice_pay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_shield(args: argparse.Namespace) -> int:
+    db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
+    tm = TicketManager(db, profile_m=0, profile_x=0)
+
+    amount_wei = parse_eth(args.amount)
+    tickets = tm.create_multi_shield_tickets(
+        amount_wei=amount_wei,
+        chain_id=args.chain_id,
+        label=args.label or "Multi-Shield",
+    )
+
+    print("════════════════════════════════════════════════════════════════════════════")
+    print("                  EDW-PY MULTI-SHIELD DECOMPOSITION                         ")
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"Total Amount:        {args.amount} ETH ({amount_wei} wei)")
+    print(f"Decomposed Notes:    {len(tickets)} note(s) -> {[t.amount + ' ETH' for t in tickets]}")
+    for idx, t in enumerate(tickets):
+        print(f"  [{idx + 1}] {t.amount:<5} ETH | Pool: {t.pool_id} | Commitment: {t.commitment_hex[:20]}...")
+
+    if not args.private_key:
+        print("\n[✓] Draft tickets encrypted and stored locally.")
+        print("    Pass --private-key <hex> to sign the Dual Multi-Shield Bundle (EIP-7702 UserOp + EIP-1559).")
+        print("════════════════════════════════════════════════════════════════════════════")
+        return 0
+
+    bundle = TransactionBuilder.build_multi_shield_bundle(
+        tickets=tickets,
+        private_key=args.private_key,
+        start_nonce=args.nonce,
+    )
+    print(f"\nSender Address:      {bundle.sender}")
+    if bundle.user_operation is not None:
+        print(f"ERC-4337 UserOpHash: {bundle.user_operation.user_op_hash}")
+        print(f"EIP-7702 Delegate:   {bundle.user_operation.authorization.address if bundle.user_operation.authorization else 'already-delegated'}")
+    print(f"EIP-1559 Fallback:   {len(bundle.eip1559_txs)} signed raw transaction(s) (nonces {args.nonce}..{args.nonce + len(bundle.eip1559_txs) - 1})")
+    for tx in bundle.eip1559_txs:
+        print(f"  • Nonce #{tx.nonce}: tx_hash={tx.tx_hash}")
+    print("════════════════════════════════════════════════════════════════════════════")
+    return 0
+
+
+def cmd_unshield(args: argparse.Namespace) -> int:
+    db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
+    tm = TicketManager(db, profile_m=0, profile_x=0)
+
+    amount_wei = parse_eth(args.amount)
+    if args.exact:
+        selected = tm.select_exact_tickets(amount_wei, currency="ETH", chain_id=args.chain_id)
+        mode_str = "EXACT MATCH"
+    else:
+        selected = tm.select_cover_tickets(amount_wei, currency="ETH", chain_id=args.chain_id)
+        mode_str = "COVER (LARGEST-FIRST)"
+
+    total_selected_wei = sum(t.amount_wei for t in selected)
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"                  EDW-PY UNSHIELD COIN SELECTION ({mode_str})")
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"Target Recipient:    {args.to}")
+    print(f"Requested Amount:    {args.amount} ETH ({amount_wei} wei)")
+    print(f"Selected Notes ({len(selected)}): {total_selected_wei / 1e18:.4f} ETH total")
+    for idx, t in enumerate(selected):
+        print(
+            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}..."
+        )
+    print("════════════════════════════════════════════════════════════════════════════")
+    return 0
+
+
+def cmd_network(args: argparse.Namespace) -> int:
+    db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
+    nm = NetworkConfigManager(db, chain_id=args.chain_id)
+
+    action = args.net_action
+    if action == "view":
+        svc = nm.load()
+    elif action == "rpc-add":
+        svc = nm.add_rpc(args.url)
+    elif action == "rpc-remove":
+        svc = nm.remove_rpc(args.url)
+    elif action == "bundler-add":
+        svc = nm.add_bundler(args.url)
+    elif action == "bundler-remove":
+        svc = nm.remove_bundler(args.url)
+    elif action == "indexer-set":
+        svc = nm.set_indexer(args.url)
+    elif action == "indexer-clear":
+        svc = nm.set_indexer(None)
+    else:
+        raise ValueError(f"Unknown network action: {action}")
+
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"               EDW-PY NETWORK SERVICES (CHAIN ID: {svc.chain_id})")
+    print("════════════════════════════════════════════════════════════════════════════")
+    print(f"Saga Indexer URL:    {svc.indexer_url or '(disabled — RPC log sync only)'}")
+    print(f"RPC Endpoints ({len(svc.rpc_urls)}):")
+    for u in svc.rpc_urls:
+        print(f"  • {u}")
+    print(f"ERC-4337 Bundlers ({len(svc.bundler_urls)}):")
+    if svc.bundler_urls:
+        for u in svc.bundler_urls:
+            print(f"  • {u}")
+    else:
+        print("  • (none configured — using sovereign EIP-1559 fallback)")
+    print("════════════════════════════════════════════════════════════════════════════")
+    return 0
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     from kohaku.tui.app import run_tui
     run_tui(mnemonic=args.mnemonic, chain_id=args.chain_id)
@@ -245,7 +353,7 @@ def main() -> None:
     inv_sub = inv_p.add_subparsers(dest="subcommand", required=True)
 
     inv_new = inv_sub.add_parser("new", help="Create an anonymous payment invoice (0 leaks)")
-    inv_new.add_argument("--amount", default="0.1", help="Amount denomination (0.1, 1, 10, 100)")
+    inv_new.add_argument("--amount", default="0.1", help="Amount denomination (0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30, 100)")
     inv_new.add_argument("--currency", default="ETH", help="Asset (default: ETH)")
     inv_new.add_argument("--label", default="", help="Optional local note label")
     inv_new.set_defaults(func=cmd_invoice_new)
@@ -255,6 +363,42 @@ def main() -> None:
     inv_pay.add_argument("--private-key", help="Funding private key to sign and broadcast")
     inv_pay.add_argument("--nonce", type=int, help="Account nonce")
     inv_pay.set_defaults(func=cmd_invoice_pay)
+
+    # shield (multi-note greedy packing + Dual UserOp / EIP-1559)
+    sh_p = subparsers.add_parser("shield", help="Decompose and shield arbitrary ETH amounts into Tornado notes")
+    sh_p.add_argument("--amount", required=True, help="Decimal ETH amount (e.g. 33.34)")
+    sh_p.add_argument("--label", default="Multi-Shield", help="Label prefix for created notes")
+    sh_p.add_argument("--private-key", help="Optional private key to sign Dual UserOp + EIP-1559 bundle")
+    sh_p.add_argument("--nonce", type=int, default=0, help="Starting account nonce (default: 0)")
+    sh_p.set_defaults(func=cmd_shield)
+
+    # unshield (exact / cover coin selection over held MINED notes)
+    un_p = subparsers.add_parser("unshield", help="Select held MINED notes to unshield a target ETH amount")
+    un_p.add_argument("--amount", required=True, help="Decimal ETH amount to unshield (e.g. 1.1)")
+    un_p.add_argument("--to", required=True, help="Recipient Ethereum address (0x...)")
+    un_p.add_argument("--exact", action="store_true", help="Require exact denomination match instead of cover")
+    un_p.set_defaults(func=cmd_unshield)
+
+    # network (encrypted per-chain RPC, Bundler, and Saga Indexer registry)
+    net_p = subparsers.add_parser("network", help="Manage encrypted per-chain RPC, Bundler, and Indexer services")
+    net_sub = net_p.add_subparsers(dest="net_action", required=True)
+
+    net_view = net_sub.add_parser("view", help="View configured network endpoints")
+    net_view.set_defaults(func=cmd_network)
+
+    for act, help_txt in (
+        ("rpc-add", "Add an RPC endpoint URL"),
+        ("rpc-remove", "Remove an RPC endpoint URL"),
+        ("bundler-add", "Add an ERC-4337 Bundler URL"),
+        ("bundler-remove", "Remove an ERC-4337 Bundler URL"),
+        ("indexer-set", "Set the Saga CDN Indexer URL"),
+    ):
+        p_act = net_sub.add_parser(act, help=help_txt)
+        p_act.add_argument("url", help="Service endpoint URL")
+        p_act.set_defaults(func=cmd_network)
+
+    net_clear = net_sub.add_parser("indexer-clear", help="Disable the Saga CDN Indexer for this chain")
+    net_clear.set_defaults(func=cmd_network)
 
     # tui
     tui_p = subparsers.add_parser("tui", help="Launch interactive Terminal Desktop Wallet UI")
@@ -271,3 +415,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
