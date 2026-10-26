@@ -120,6 +120,36 @@ def test_circuit_inputs_and_withdraw_transaction():
     assert tx.value == 0
     assert tx.data.startswith("0x21a0adb6")
 
+    # Verify end-to-end build_withdrawal_inputs with TornadoVault & LE integer conversion
+    from kohaku.tornado.vault import TornadoVault
+    from kohaku.tornado.withdraw import build_withdrawal_inputs
+
+    note = TornadoNote(
+        currency="ETH",
+        amount="0.1",
+        chain_id=1,
+        nullifier=b"\x01" + b"\x00" * 30,
+        secret=b"\x02" + b"\x00" * 30,
+    )
+    assert note.nullifier_int == 1
+    assert note.secret_int == 2
+
+    vault = TornadoVault("tornado-cash-1-eth-0.1")
+    vault.commitments.append(note.commitment)
+    vault._commitments_set.add(note.commitment)
+    vault.synced = True
+
+    w_inputs = build_withdrawal_inputs(
+        vault=vault,
+        note=note,
+        recipient="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    )
+    assert w_inputs.nullifier == 1
+    assert w_inputs.secret == 2
+    assert w_inputs.nullifier_hash == note.nullifier_hash
+    assert len(w_inputs.path_elements) == 20
+
+
 
 def test_relayer_registry_vault_and_ens_resolution(monkeypatch):
     from kohaku.edw.p2p import P2PBroadcaster

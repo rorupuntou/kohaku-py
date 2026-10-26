@@ -117,7 +117,7 @@ class RailgunVault:
                     comm_val = (
                         existing_utxo.commitment
                         if existing_utxo is not None and existing_utxo.commitment != 0
-                        else (note.commitment if len(self.shields) <= 64 else 0)
+                        else 0
                     )
                     self.utxos[(tree_num, leaf_idx)] = RailgunUTXO(
                         tree_number=tree_num,
@@ -128,6 +128,8 @@ class RailgunVault:
                         token_address=token_addr,
                         amount_wei=value,
                         npk=npk,
+                        token_type=token_type,
+                        token_sub_id=token_sub_id,
                     )
 
         elif topic in (TRANSACT_TOPIC, LEGACY_TRANSACT_TOPIC) and len(raw) >= 160:

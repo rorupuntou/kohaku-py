@@ -47,10 +47,15 @@ def test_encrypted_database_disk_zero_leakage(tmp_path: Path):
     db.set("keyring", "mnemonic:0", secret_text.encode("utf-8"))
     db.set_json("profiles", "index", [{"m": 0, "x": 0, "name": "default"}])
 
-    # 2. Inspect raw files on disk: verify zero plaintext leakage
+    # 2. Inspect raw files on disk: verify zero plaintext leakage and strict 0700/0600 permissions
+    import stat
+
+    assert stat.S_IMODE(db_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((db_dir / "header.json").stat().st_mode) == 0o600
     raw_files = list(db_dir.glob("*.bin"))
     assert len(raw_files) == 2  # exactly two blinded records
     for rf in raw_files:
+        assert stat.S_IMODE(rf.stat().st_mode) == 0o600
         content = rf.read_bytes()
         assert b"abandon" not in content
         assert b"default" not in content

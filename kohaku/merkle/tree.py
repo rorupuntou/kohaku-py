@@ -16,6 +16,11 @@ class MerkleProof:
     siblings: list[int]
     path_indices: list[int]  # 0 for left child, 1 for right child
 
+    @property
+    def path_elements(self) -> list[int]:
+        """Alias for `siblings` matching Circom / SnarkJS `pathElements` naming."""
+        return self.siblings
+
     def verify(self, hash_fn: Callable[[int, int], int] = mimc_hash2) -> bool:
         """Verifies that the proof path correctly computes the root from the leaf."""
         current = self.leaf
@@ -27,8 +32,105 @@ class MerkleProof:
         return current == self.root
 
 
+def compute_lean_imt_root(
+    leaves: list[int], hash_fn: Callable[[int, int], int]
+) -> int:
+    """Computes the dynamic LeanIMT root (`@zk-kit/lean-imt.sol` used by 0xBow Privacy Pools).
+
+    Unlike a fixed-depth Merkle tree, odd nodes without a right sibling at any level
+    are promoted directly to the parent level without hashing against a zero value.
+    """
+    if not leaves:
+        return 0
+    level = list(leaves)
+    while len(level) > 1:
+        next_level: list[int] = []
+        for i in range(0, len(level), 2):
+            if i + 1 < len(level):
+                next_level.append(hash_fn(level[i], level[i + 1]))
+            else:
+                next_level.append(level[i])
+        level = next_level
+    return level[0]
+
+
+class LeanIMT:
+    """Dynamic-depth Lean Incremental Merkle Tree (`@zk-kit/lean-imt.sol`).
+
+    Used by 0xBow Privacy Pools (`PrivacyPoolsVault` and `AssociationSet`) so that
+    `root()` matches the on-chain `currentRoot()` selector (`0x9c4f8c08`) 1:1.
+    """
+
+    def __init__(self, hash_fn: Callable[[int, int], int]):
+        self.hash_fn = hash_fn
+        self.leaves: list[int] = []
+        self.layers: list[dict[int, int]] = [{}]
+
+    @property
+    def next_index(self) -> int:
+        return len(self.leaves)
+
+    @property
+    def depth(self) -> int:
+        n = len(self.leaves)
+        if n <= 1:
+            return 0
+        return (n - 1).bit_length()
+
+    def insert(self, leaf: int) -> int:
+        idx = len(self.leaves)
+        self.leaves.append(leaf)
+        self.layers[0][idx] = leaf
+        return idx
+
+    def insert_batch(self, leaves: list[int]) -> list[int]:
+        return [self.insert(leaf) for leaf in leaves]
+
+    def root(self) -> int:
+        return compute_lean_imt_root(self.leaves, self.hash_fn)
+
+    def generate_proof(self, index: int) -> MerkleProof:
+        """Generates a LeanIMT membership proof for the leaf at `index`.
+
+        Only levels where a sibling exists are included in `siblings` / `path_indices`,
+        so `proof.verify(self.hash_fn)` evaluates to `self.root()`.
+        """
+        if index < 0 or index >= len(self.leaves):
+            raise IndexError(f"Leaf index {index} out of bounds (0..{len(self.leaves)})")
+
+        leaf = self.leaves[index]
+        siblings: list[int] = []
+        path_indices: list[int] = []
+
+        level = list(self.leaves)
+        curr_idx = index
+        while len(level) > 1:
+            is_right = (curr_idx % 2) == 1
+            sib_idx = curr_idx - 1 if is_right else curr_idx + 1
+            if sib_idx < len(level):
+                siblings.append(level[sib_idx])
+                path_indices.append(1 if is_right else 0)
+
+            next_level: list[int] = []
+            for i in range(0, len(level), 2):
+                if i + 1 < len(level):
+                    next_level.append(self.hash_fn(level[i], level[i + 1]))
+                else:
+                    next_level.append(level[i])
+            level = next_level
+            curr_idx //= 2
+
+        return MerkleProof(
+            index=index,
+            root=level[0] if level else 0,
+            leaf=leaf,
+            siblings=siblings,
+            path_indices=path_indices,
+        )
+
+
 class MerkleTree:
-    """Fixed-depth binary Merkle Tree matching on-chain contracts.
+    """Fixed-depth binary Merkle Tree matching on-chain contracts (Tornado Cash & Railgun).
 
     Supports incremental leaf insertion, precomputed zero branches, and
     Merkle proof generation for ZK-SNARK provers.

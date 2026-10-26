@@ -132,4 +132,46 @@ def test_dual_multi_shield_bundle():
     assert bundle.user_operation.authorization is not None
     assert bundle.user_operation.authorization.address == SIMPLE_7702_ACCOUNT_ADDRESS
     assert bundle.user_operation.authorization.designator_bytecode().startswith(bytes.fromhex("ef0100"))
+    assert len(bundle.user_operation.account_gas_limits_hex) == 66
+    assert len(bundle.user_operation.gas_fees_hex) == 66
+
+
+def test_packed_user_operation_v08_eip712_hash_kohaku_rs_vector():
+    """Verifies bit-for-bit parity with `kohaku-rs` (`crates/userop-kit/src/signable_user_operation.rs` snapshot)."""
+    from kohaku.edw.tx_builder import compute_packed_user_op_hash_v08, pack_u128_pair
+
+    init_code = bytes.fromhex("000000000000000000000000000000000000beef") + b"factory data"
+    paymaster_and_data = (
+        bytes.fromhex("000000000000000000000000000000000000feed")
+        + (20_000).to_bytes(16, "big")
+        + (30_000).to_bytes(16, "big")
+        + b"paymaster data"
+    )
+    assert (
+        "0x" + pack_u128_pair(50_000, 100_000).hex()
+        == "0x0000000000000000000000000000c350000000000000000000000000000186a0"
+    )
+    assert (
+        "0x" + pack_u128_pair(50, 200).hex()
+        == "0x00000000000000000000000000000032000000000000000000000000000000c8"
+    )
+
+    op_hash = compute_packed_user_op_hash_v08(
+        sender="0x000000000000000000000000000000000000dEaD",
+        nonce=42,
+        init_code=init_code,
+        call_data=b"call data",
+        verification_gas_limit=50_000,
+        call_gas_limit=100_000,
+        pre_verification_gas=10_000,
+        max_priority_fee_per_gas=50,
+        max_fee_per_gas=200,
+        paymaster_and_data=paymaster_and_data,
+        chain_id=1,
+    )
+    assert (
+        "0x" + op_hash.hex()
+        == "0xa763cdf6c11eee14cea4d32863d184afe29859b556c85b7ae6f11f64f8945492"
+    )
+
 

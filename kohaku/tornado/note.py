@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from kohaku.crypto.bn254 import to_field
 from kohaku.crypto.mimc import mimc_sponge
+from kohaku.crypto.pedersen import pedersen_hash
 
 
 @dataclass
@@ -26,11 +27,29 @@ class TornadoNote:
             raise ValueError(f"Secret must be 31 bytes, got {len(self.secret)}")
 
     @property
+    def preimage(self) -> bytes:
+        """Returns the 62-byte preimage `nullifier (31B) || secret (31B)`."""
+        return self.nullifier + self.secret
+
+    @property
+    def nullifier_int(self) -> int:
+        """Returns the 248-bit little-endian integer expected by `withdraw.circom` (`U256::from_le_slice`)."""
+        return int.from_bytes(self.nullifier, byteorder="little")
+
+    @property
+    def secret_int(self) -> int:
+        """Returns the 248-bit little-endian integer expected by `withdraw.circom` (`U256::from_le_slice`)."""
+        return int.from_bytes(self.secret, byteorder="little")
+
+    @property
     def commitment(self) -> int:
-        """Computes the on-chain deposit commitment: mimc_sponge([nullifier, secret])."""
-        nullifier_int = int.from_bytes(self.nullifier, byteorder="big")
-        secret_int = int.from_bytes(self.secret, byteorder="big")
-        return mimc_sponge([to_field(nullifier_int), to_field(secret_int)])
+        """Computes the canonical Tornado Cash deposit commitment: `pedersen_hash(nullifier || secret)`."""
+        return pedersen_hash(self.preimage)
+
+    @property
+    def mimc_commitment(self) -> int:
+        """Computes the alternative pure-MiMC commitment: `mimc_sponge([nullifier_le, secret_le])`."""
+        return mimc_sponge([to_field(self.nullifier_int), to_field(self.secret_int)])
 
     @property
     def commitment_hex(self) -> str:
@@ -38,9 +57,13 @@ class TornadoNote:
 
     @property
     def nullifier_hash(self) -> int:
-        """Computes the on-chain nullifier hash revealed on withdrawal: mimc_sponge([nullifier])."""
-        nullifier_int = int.from_bytes(self.nullifier, byteorder="big")
-        return mimc_sponge([to_field(nullifier_int)])
+        """Computes the canonical on-chain nullifier hash revealed on withdrawal: `pedersen_hash(nullifier)`."""
+        return pedersen_hash(self.nullifier)
+
+    @property
+    def mimc_nullifier_hash(self) -> int:
+        """Computes the alternative pure-MiMC nullifier hash: `mimc_sponge([nullifier_le])`."""
+        return mimc_sponge([to_field(self.nullifier_int)])
 
     @property
     def nullifier_hash_hex(self) -> str:

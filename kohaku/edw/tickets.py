@@ -366,13 +366,23 @@ class TicketManager:
         self.save_ticket(ticket)
         return True
 
-    def get_spendable_balance(self, currency: str = "ETH") -> float:
-        """Calculates total spendable (MINED and unspent) holdings in currency."""
-        total = 0.0
+    def get_spendable_balance_wei(self, currency: str = "ETH") -> int:
+        """Calculates exact total spendable (MINED and unspent) holdings in wei."""
+        total_wei = 0
         for t in self.list_tickets(state=TicketState.MINED):
             if t.currency.upper() == currency.upper():
-                total += float(t.amount)
-        return total
+                total_wei += t.amount_wei
+        return total_wei
+
+    def get_spendable_balance(self, currency: str = "ETH") -> float:
+        """Calculates total spendable (MINED and unspent) holdings in currency using exact Decimal summation."""
+        from decimal import Decimal
+
+        total = Decimal("0")
+        for t in self.list_tickets(state=TicketState.MINED):
+            if t.currency.upper() == currency.upper():
+                total += Decimal(str(t.amount))
+        return float(total)
 
     @staticmethod
     def prepare_invoice_deposit(invoice_uri_or_dict: str | dict) -> dict[str, Any]:

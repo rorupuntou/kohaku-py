@@ -41,7 +41,11 @@ KNOWN_MAINNET_TOKENS: dict[str, tuple[str, int]] = {
 
 @dataclass
 class RailgunUTXO:
-    """Stateful Railgun UTXO output indexed by `(tree_number, leaf_index)`."""
+    """Stateful Railgun UTXO output indexed by `(tree_number, leaf_index)`.
+
+    When ingested from an L1 `Shield` event without pre-computed `railgun-1-ops` commitments,
+    `commitment` is lazily computed and cached via `poseidon_hash([npk, token_id, amount_wei])`.
+    """
 
     tree_number: int
     leaf_index: int
@@ -51,6 +55,31 @@ class RailgunUTXO:
     token_address: str | None = None
     amount_wei: int | None = None
     npk: int | None = None
+    token_type: int = 0
+    token_sub_id: int = 0
+
+    def __getattribute__(self, name: str) -> Any:
+        val = object.__getattribute__(self, name)
+        if name == "commitment" and val == 0:
+            npk = object.__getattribute__(self, "npk")
+            token_addr = object.__getattribute__(self, "token_address")
+            amount_wei = object.__getattribute__(self, "amount_wei")
+            if npk is not None and token_addr is not None and amount_wei is not None:
+                token_type = object.__getattribute__(self, "token_type")
+                token_sub_id = object.__getattribute__(self, "token_sub_id")
+                note = RailgunShieldNote(
+                    tree_number=object.__getattribute__(self, "tree_number"),
+                    leaf_index=object.__getattribute__(self, "leaf_index"),
+                    npk=npk,
+                    token_type=token_type,
+                    token_address=token_addr,
+                    token_sub_id=token_sub_id,
+                    value=amount_wei,
+                    block_number=object.__getattribute__(self, "block_number"),
+                )
+                val = note.commitment
+                object.__setattr__(self, "commitment", val)
+        return val
 
     @property
     def outpoint(self) -> tuple[int, int]:

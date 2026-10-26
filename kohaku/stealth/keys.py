@@ -120,8 +120,8 @@ def generate_stealth_address(stealth_meta_address_or_uri: str) -> dict[str, Any]
     P_spend = _decompress_point(spend_pub_bytes)
     P_view = _decompress_point(view_pub_bytes)
 
-    # Ephemeral keypair (r, R)
-    r_scalar = int.from_bytes(secrets.token_bytes(32), "big") % secp256k1.N
+    # Ephemeral keypair (r, R) in [1, secp256k1.N - 1] without modular bias
+    r_scalar = secrets.randbelow(secp256k1.N - 1) + 1
     R_ephemeral = secp256k1.multiply(secp256k1.G, r_scalar)
     R_compressed = _compress_point(R_ephemeral)
 

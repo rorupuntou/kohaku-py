@@ -22,6 +22,17 @@ class Socks5Error(Exception):
     pass
 
 
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Reads exactly `n` bytes from `sock`, preventing short reads on high-latency Tor circuits."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise Socks5Error(f"Unexpected EOF from SOCKS5 proxy (expected {n} bytes, got {len(buf)})")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def socks5_connect(
     dest_host: str,
     dest_port: int,
@@ -41,46 +52,52 @@ def socks5_connect(
         sock.close()
         raise Socks5Error(f"Could not connect to SOCKS5 proxy at {proxy_host}:{proxy_port}: {e}")
 
-    # 1. Handshake greeting: [VER=5, NMETHODS=1, METHOD=0 (No Authentication)]
-    sock.sendall(b"\x05\x01\x00")
-    resp = sock.recv(2)
-    if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
-        sock.close()
-        raise Socks5Error(f"SOCKS5 proxy rejected authentication: {resp.hex()}")
-
-    # 2. Connection request: [VER=5, CMD=1 (CONNECT), RSV=0, ATYP, DEST_ADDR, DEST_PORT]
-    req = bytearray(b"\x05\x01\x00")
     try:
-        # Check if dest_host is IPv4
-        ip_bytes = socket.inet_aton(dest_host)
-        req.append(1)  # ATYP = 1 (IPv4)
-        req.extend(ip_bytes)
-    except OSError:
-        # Domain name: ATYP = 3, [len(domain), domain_bytes]
-        domain_bytes = dest_host.encode("utf-8")
-        req.append(3)
-        req.append(len(domain_bytes))
-        req.extend(domain_bytes)
+        # 1. Handshake greeting: [VER=5, NMETHODS=1, METHOD=0 (No Authentication)]
+        sock.sendall(b"\x05\x01\x00")
+        resp = _recv_exact(sock, 2)
+        if resp[0] != 5 or resp[1] != 0:
+            raise Socks5Error(f"SOCKS5 proxy rejected authentication: {resp.hex()}")
 
-    req.extend(dest_port.to_bytes(2, "big"))
-    sock.sendall(req)
+        # 2. Connection request: [VER=5, CMD=1 (CONNECT), RSV=0, ATYP, DEST_ADDR, DEST_PORT]
+        req = bytearray(b"\x05\x01\x00")
+        try:
+            # Check if dest_host is IPv4
+            ip_bytes = socket.inet_aton(dest_host)
+            req.append(1)  # ATYP = 1 (IPv4)
+            req.extend(ip_bytes)
+        except OSError:
+            # Domain name: ATYP = 3, [len(domain), domain_bytes]
+            domain_bytes = dest_host.encode("utf-8")
+            if len(domain_bytes) > 255:
+                raise Socks5Error(f"Destination domain exceeds 255 bytes: {dest_host}")
+            req.append(3)
+            req.append(len(domain_bytes))
+            req.extend(domain_bytes)
 
-    # 3. Connection response: [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
-    resp = sock.recv(4)
-    if len(resp) < 4 or resp[1] != 0:
-        status_code = resp[1] if len(resp) > 1 else -1
+        req.extend(dest_port.to_bytes(2, "big"))
+        sock.sendall(req)
+
+        # 3. Connection response: [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
+        resp = _recv_exact(sock, 4)
+        if resp[1] != 0:
+            status_code = resp[1]
+            raise Socks5Error(f"SOCKS5 proxy connection failed with code {status_code}")
+
+        # Consume exact remaining BND.ADDR and BND.PORT bytes
+        atyp = resp[3]
+        if atyp == 1:
+            _recv_exact(sock, 4 + 2)  # IPv4 + port
+        elif atyp == 3:
+            addr_len = _recv_exact(sock, 1)[0]
+            _recv_exact(sock, addr_len + 2)
+        elif atyp == 4:
+            _recv_exact(sock, 16 + 2)  # IPv6 + port
+        else:
+            raise Socks5Error(f"Unsupported SOCKS5 address type: {atyp}")
+    except Exception:
         sock.close()
-        raise Socks5Error(f"SOCKS5 proxy connection failed with code {status_code}")
-
-    # Read remaining address and port bytes
-    atyp = resp[3]
-    if atyp == 1:
-        sock.recv(4 + 2)  # IPv4 + port
-    elif atyp == 3:
-        addr_len = sock.recv(1)[0]
-        sock.recv(addr_len + 2)
-    elif atyp == 4:
-        sock.recv(16 + 2)  # IPv6 + port
+        raise
 
     return sock
 
@@ -115,8 +132,10 @@ def post_json_rpc(
         else:
             sock = raw_sock
 
+        # Use HTTP/1.0 (RFC 1945) so upstream proxies (Cloudflare/Nginx) never wrap the
+        # response in `Transfer-Encoding: chunked` hex framing.
         req_headers = (
-            f"POST {path} HTTP/1.1\r\n"
+            f"POST {path} HTTP/1.0\r\n"
             f"Host: {host}\r\n"
             f"Content-Type: application/json\r\n"
             f"Content-Length: {len(data)}\r\n"
@@ -144,7 +163,7 @@ def post_json_rpc(
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json", "User-Agent": "edw-py/0.1.0"},
+        headers={"Content-Type": "application/json", "User-Agent": "edw-py/0.2.1"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -177,9 +196,9 @@ def get_json_via_proxy(
             sock = raw_sock
 
         req_headers = (
-            f"GET {path} HTTP/1.1\r\n"
+            f"GET {path} HTTP/1.0\r\n"
             f"Host: {host}\r\n"
-            f"User-Agent: edw-py/0.1.0\r\n"
+            f"User-Agent: edw-py/0.2.1\r\n"
             f"Accept: application/json\r\n"
             f"Connection: close\r\n\r\n"
         ).encode("utf-8")

@@ -49,8 +49,8 @@ def build_withdrawal_inputs(
         relayer=relayer_int,
         fee=fee,
         refund=refund,
-        nullifier=note.nullifier,
-        secret=note.secret,
+        nullifier=note.nullifier_int,
+        secret=note.secret_int,
         path_elements=proof.path_elements,
         path_indices=proof.path_indices,
     )

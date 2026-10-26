@@ -40,6 +40,41 @@ def test_socks5_handshake_mock_server():
     server.close()
 
 
+def test_socks5_domain_atyp3_no_dns_leak_and_short_reads():
+    """Verifies ATYP=3 (domain resolved by Tor proxy) and `_recv_exact` resilience to 1-byte TCP fragmentation."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+    server.listen(1)
+
+    def _fragmented_proxy():
+        conn, _ = server.accept()
+        greet = conn.recv(3)
+        assert greet == b"\x05\x01\x00"
+        # Send greeting reply 1 byte at a time
+        for b in b"\x05\x00":
+            conn.sendall(bytes([b]))
+
+        req = conn.recv(64)
+        # Must use ATYP=3 (domain name), never local DNS resolution
+        assert req[:4] == b"\x05\x01\x00\x03"
+        domain_len = req[4]
+        assert req[5 : 5 + domain_len] == b"eth.00relayer.xyz"
+        # Send ATYP=3 response 1 byte at a time to test _recv_exact
+        reply = b"\x05\x00\x00\x03\x04test\x01\xbb"
+        for b in reply:
+            conn.sendall(bytes([b]))
+        conn.close()
+
+    t = threading.Thread(target=_fragmented_proxy, daemon=True)
+    t.start()
+
+    sock = socks5_connect("eth.00relayer.xyz", 443, proxy_host="127.0.0.1", proxy_port=port, timeout=2.0)
+    assert sock is not None
+    sock.close()
+    server.close()
+
+
 def test_p2p_broadcaster_with_failover():
     """Verifies that P2PBroadcaster fails over from broken peers to healthy peers."""
     received_requests = []

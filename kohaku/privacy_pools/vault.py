@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from kohaku.crypto.poseidon import poseidon_hash2
-from kohaku.merkle.tree import MerkleProof, MerkleTree
+from kohaku.merkle.tree import LeanIMT, MerkleProof, MerkleTree
 from kohaku.privacy_pools.note import PrivacyPoolNote
 from kohaku.privacy_pools.pools import PrivacyPool, get_privacy_pool
 from kohaku.sync.client import SAGA_V2_URL, SagaClient
@@ -154,13 +154,13 @@ class PrivacyPoolsVault:
             "total_withdrawals": len(self.spent_nullifiers),
         }
 
-    def tree(self) -> MerkleTree:
-        """Builds or returns cached 20-level Poseidon Merkle tree."""
+    def tree(self) -> LeanIMT:
+        """Builds or returns cached dynamic Poseidon LeanIMT (`@zk-kit/lean-imt.sol`)."""
         if not self.synced:
             self.sync()
 
         if self._tree is None:
-            t = MerkleTree(height=20, hash_fn=poseidon_hash2, zero_value=0)
+            t = LeanIMT(hash_fn=poseidon_hash2)
             for leaf in self.commitments:
                 t.insert(leaf)
             self._tree = t

@@ -172,6 +172,38 @@ def cmd_invoice_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_private_key(
+    args: argparse.Namespace, db: Optional[EncryptedDatabase] = None
+) -> Optional[str]:
+    """Resolves signing private key securely via `getpass`, unlocked Keyring profile, or CLI arg (with `/proc` OPSEC warning)."""
+    raw_key = getattr(args, "private_key", None)
+    if getattr(args, "prompt_key", False) or raw_key == "-":
+        import getpass
+
+        return getpass.getpass("Enter signing private key (hidden): ").strip()
+    if getattr(args, "from_profile", False) and db is not None:
+        km = KeyringManager(db)
+        profiles = km.list_profiles()
+        if not profiles:
+            raise ValueError("No profiles configured in datastore for --from-profile")
+        p = profiles[0]
+        phrase = km.get_mnemonic(p.mnemonic_index)
+        Account.enable_unaudited_hdwallet_features()
+        acct = Account.from_mnemonic(
+            phrase, account_path=f"m/44'/60'/{p.profile_index}'/0/0"
+        )
+        return acct.key.hex()
+    if raw_key:
+        if "pytest" not in sys.modules:
+            print(
+                "[OPSEC NOTICE] Passing --private-key via CLI argv exposes it in /proc/<pid>/cmdline. "
+                "Prefer `--prompt-key` or `--from-profile`.",
+                file=sys.stderr,
+            )
+        return raw_key
+    return None
+
+
 def cmd_invoice_pay(args: argparse.Namespace) -> int:
     prep = TicketManager.prepare_invoice_deposit(args.invoice)
     print("Invoice Payment Prepared:")
@@ -179,8 +211,9 @@ def cmd_invoice_pay(args: argparse.Namespace) -> int:
     print(f"  Amount:       {prep['value_eth']} ETH ({prep['value_wei']} wei)")
     print(f"  Calldata:     {prep['data'][:42]}...")
 
-    if not args.private_key:
-        print("\n[!] To broadcast directly, pass --private-key <hex>. Otherwise copy the calldata above.")
+    priv_key = _resolve_private_key(args)
+    if not priv_key:
+        print("\n[!] To broadcast directly, pass --prompt-key (recommended) or --private-key <hex>. Otherwise copy the calldata above.")
         return 0
 
     broadcaster = P2PBroadcaster(tor_proxy=args.tor_proxy)
@@ -188,7 +221,7 @@ def cmd_invoice_pay(args: argparse.Namespace) -> int:
         commitment_hex=prep["commitment"],
         pool_id=f"tornado-cash-{prep['chain_id']}-eth-{prep['value_eth']}",
         nonce=args.nonce or 0,
-        private_key=args.private_key,
+        private_key=priv_key,
     )
     print(f"\nBroadcasting raw transaction (Hash: {signed.tx_hash})...")
     res = broadcaster.broadcast_raw_tx(signed.raw_hex)
@@ -215,15 +248,16 @@ def cmd_shield(args: argparse.Namespace) -> int:
     for idx, t in enumerate(tickets):
         print(f"  [{idx + 1}] {t.amount:<5} ETH | Pool: {t.pool_id} | Commitment: {t.commitment_hex[:20]}...")
 
-    if not args.private_key:
+    priv_key = _resolve_private_key(args, db=db)
+    if not priv_key:
         print("\n[✓] Draft tickets encrypted and stored locally.")
-        print("    Pass --private-key <hex> to sign the Dual Multi-Shield Bundle (EIP-7702 UserOp + EIP-1559).")
+        print("    Pass --prompt-key or --from-profile to sign the Dual Multi-Shield Bundle (EIP-7702 UserOp + EIP-1559).")
         print("════════════════════════════════════════════════════════════════════════════")
         return 0
 
     bundle = TransactionBuilder.build_multi_shield_bundle(
         tickets=tickets,
-        private_key=args.private_key,
+        private_key=priv_key,
         start_nonce=args.nonce,
     )
     print(f"\nSender Address:      {bundle.sender}")
@@ -267,6 +301,8 @@ def cmd_relayers(args: argparse.Namespace) -> int:
 
 
 def cmd_unshield(args: argparse.Namespace) -> int:
+    import secrets
+
     db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
     tm = TicketManager(db, profile_m=0, profile_x=0)
 
@@ -286,6 +322,7 @@ def cmd_unshield(args: argparse.Namespace) -> int:
     elif getattr(args, "auto_relayer", False):
         quote = RelayerRegistryVault.select_best_relayer(socks5_proxy=args.tor_proxy)
 
+    jitter_max = getattr(args, "jitter", 0) or 0
     total_selected_wei = sum(t.amount_wei for t in selected)
     print("════════════════════════════════════════════════════════════════════════════")
     print(f"                  EDW-PY UNSHIELD COIN SELECTION ({mode_str})")
@@ -296,14 +333,24 @@ def cmd_unshield(args: argparse.Namespace) -> int:
     if quote is not None:
         print(f"Selected Relayer:    {quote.base_url} (Reward: {quote.reward_account})")
         print(f"Relayer Service Fee: {quote.service_fee_percent:.3f}%")
+    if len(selected) > 1:
+        print(
+            "[OPSEC WARNING] Unshielding multiple notes to the same recipient in a burst allows "
+            "amount/timing graph correlation. Use `--jitter <sec>` and fresh recipient addresses."
+        )
+    cum_delay = 0
     for idx, t in enumerate(selected):
         fee_info = ""
         if quote is not None:
             fee_wei = quote.compute_fee_wei(t.amount_wei)
             net_wei = max(0, t.amount_wei - fee_wei)
             fee_info = f" | Fee: {fee_wei / 1e18:.6f} ETH | Net: {net_wei / 1e18:.6f} ETH"
+        jitter_info = ""
+        if jitter_max > 0 and idx > 0:
+            cum_delay += secrets.randbelow(jitter_max) + 1
+            jitter_info = f" | Jitter Delay: +{cum_delay}s"
         print(
-            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}"
+            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}{jitter_info}"
         )
     print("════════════════════════════════════════════════════════════════════════════")
     return 0
@@ -480,7 +527,8 @@ def main() -> None:
 
     inv_pay = inv_sub.add_parser("pay", help="Pay / fund an anonymous invoice")
     inv_pay.add_argument("invoice", help="Invoice URI (edw-invoice:...) or JSON string")
-    inv_pay.add_argument("--private-key", help="Funding private key to sign and broadcast")
+    inv_pay.add_argument("--private-key", help="Funding private key to sign and broadcast (or '-' to prompt)")
+    inv_pay.add_argument("--prompt-key", action="store_true", help="Prompt securely for signing key via getpass (OPSEC recommended)")
     inv_pay.add_argument("--nonce", type=int, help="Account nonce")
     inv_pay.set_defaults(func=cmd_invoice_pay)
 
@@ -489,6 +537,8 @@ def main() -> None:
     sh_p.add_argument("--amount", required=True, help="Decimal ETH amount (e.g. 33.34)")
     sh_p.add_argument("--label", default="Multi-Shield", help="Label prefix for created notes")
     sh_p.add_argument("--private-key", help="Optional private key to sign Dual UserOp + EIP-1559 bundle")
+    sh_p.add_argument("--prompt-key", action="store_true", help="Prompt securely for signing key via getpass (OPSEC recommended)")
+    sh_p.add_argument("--from-profile", action="store_true", help="Derive signing key directly from unlocked Keyring profile")
     sh_p.add_argument("--nonce", type=int, default=0, help="Starting account nonce (default: 0)")
     sh_p.set_defaults(func=cmd_shield)
 
@@ -503,6 +553,12 @@ def main() -> None:
         help="Probe active on-chain relayers (/v1/status) and auto-select the healthiest lowest-fee relayer",
     )
     un_p.add_argument("--relayer-url", help="Explicit relayer base URL to query for /v1/status fee quote")
+    un_p.add_argument(
+        "--jitter",
+        type=int,
+        default=0,
+        help="Max random delay (seconds) per additional note to mitigate multi-note timing correlation",
+    )
     un_p.set_defaults(func=cmd_unshield)
 
     # relayers (on-chain Tornado Cash Relayer Registry & live /v1/status probing)

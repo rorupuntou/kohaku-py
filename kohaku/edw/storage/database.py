@@ -27,9 +27,15 @@ class EncryptedDatabase:
 
     @classmethod
     def initialize(cls, directory: Path | str, password: str | bytes) -> EncryptedDatabase:
-        """Create a fresh encrypted datastore in directory with password."""
+        """Create a fresh encrypted datastore in directory with password and strict `0700`/`0600` permissions."""
+        import os
+
         dir_path = Path(directory)
-        dir_path.mkdir(parents=True, exist_ok=True)
+        dir_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(dir_path, 0o700)
+        except OSError:
+            pass
         header_path = dir_path / cls.HEADER_FILE
 
         if header_path.exists():
@@ -43,6 +49,10 @@ class EncryptedDatabase:
             "wrapped_key": wrapped_key.hex(),
         }
         header_path.write_text(json.dumps(header_data, indent=2))
+        try:
+            os.chmod(header_path, 0o600)
+        except OSError:
+            pass
         return cls(dir_path, cipher)
 
     @classmethod
@@ -83,7 +93,12 @@ class EncryptedDatabase:
             "nonce": new_nonce.hex(),
             "wrapped_key": wrapped_key.hex(),
         }
-        (self.directory / self.HEADER_FILE).write_text(json.dumps(header_data, indent=2))
+        header_path = self.directory / self.HEADER_FILE
+        header_path.write_text(json.dumps(header_data, indent=2))
+        try:
+            os.chmod(header_path, 0o600)
+        except OSError:
+            pass
 
     def _logical_key(self, scope: str, key: str) -> str:
         return f"{scope}:{key}"
@@ -111,11 +126,17 @@ class EncryptedDatabase:
         return self.cipher.decrypt_record(logical_key, payload)
 
     def set(self, scope: str, key: str, value: bytes) -> None:
+        import os
+
         self._check_open()
         logical_key = self._logical_key(scope, key)
         path = self._record_path(logical_key)
         payload = self.cipher.encrypt_record(logical_key, value)
         path.write_bytes(payload)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     def delete(self, scope: str, key: str) -> bool:
         self._check_open()

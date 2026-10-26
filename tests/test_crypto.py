@@ -26,3 +26,25 @@ def test_poseidon():
     assert h2 < P
     h3 = poseidon_hash([1, 2, 3])
     assert h3 < P
+
+
+def test_pedersen_hash_kohaku_rs_parity():
+    from kohaku.crypto.pedersen import (
+        babyjub_pack_point,
+        babyjub_unpack_point,
+        get_base_point,
+        pedersen_hash,
+    )
+
+    # Golden vector from kohaku-rs (crates/tornadocash/src/crypto/pedersen.rs) & circomlib
+    expected = (
+        13491600061712299675396441404596955294388976214662355192405913840310160783842
+    )
+    assert pedersen_hash(b"Hello, world!") == expected
+
+    # Verify point packing/unpacking roundtrip on Pedersen generator 0
+    bp0 = get_base_point(0)
+    packed = babyjub_pack_point(bp0)
+    assert len(packed) == 32
+    assert babyjub_unpack_point(packed) == bp0
+

@@ -167,13 +167,25 @@ class TransactionBuilder:
     """High-level offline transaction constructor for deposits and unshields."""
 
     @staticmethod
+    def _gwei_to_wei(val: float | int | str) -> int:
+        from decimal import Decimal
+
+        return int(Decimal(str(val)) * (Decimal(10) ** 9))
+
+    @staticmethod
+    def _eth_to_wei(val: float | int | str) -> int:
+        from decimal import Decimal
+
+        return int(Decimal(str(val)) * (Decimal(10) ** 18))
+
+    @staticmethod
     def build_deposit_tx(
         commitment_hex: str,
         pool_id: str,
         nonce: int,
         private_key: str | bytes,
-        max_fee_per_gas_gwei: float = 25.0,
-        max_priority_fee_gwei: float = 1.5,
+        max_fee_per_gas_gwei: float | str = 25.0,
+        max_priority_fee_gwei: float | str = 1.5,
         gas_limit: int = 1_000_000,
     ) -> SignedTransaction:
         """Build and sign an offline deposit transaction for Tornado Cash."""
@@ -182,8 +194,8 @@ class TransactionBuilder:
         # deposit(bytes32) = 0xb214faa5
         calldata = bytes.fromhex("b214faa5" + commitment_clean)
 
-        max_fee_wei = int(max_fee_per_gas_gwei * 10**9)
-        priority_fee_wei = int(max_priority_fee_gwei * 10**9)
+        max_fee_wei = TransactionBuilder._gwei_to_wei(max_fee_per_gas_gwei)
+        priority_fee_wei = TransactionBuilder._gwei_to_wei(max_priority_fee_gwei)
 
         tx = EIP1559Transaction(
             chain_id=pool.chain_id,
@@ -204,22 +216,25 @@ class TransactionBuilder:
         merkle_root: str,
         proof_bytes: bytes,
         relayer_address: str,
-        relayer_fee_eth: float = 0.005,
-        refund_eth: float = 0.0,
+        relayer_fee_eth: float | str = 0.005,
+        refund_eth: float | str = 0.0,
     ) -> GaslessWithdrawPayload:
         """Constructs an unshielding payload with relayer gas compensation.
 
         The recipient address pays ZERO gas and needs ZERO balance.
+        Uses exact `Decimal` conversion to prevent 1-wei IEEE-754 rounding drift.
         """
+        from decimal import Decimal
+
         pool = get_pool(ticket.pool_id)
-        fee_wei = int(relayer_fee_eth * 10**18)
-        refund_wei = int(refund_eth * 10**18)
+        fee_wei = TransactionBuilder._eth_to_wei(relayer_fee_eth)
+        refund_wei = TransactionBuilder._eth_to_wei(refund_eth)
 
         if fee_wei >= pool.amount_wei:
             raise ValueError(f"Relayer fee ({relayer_fee_eth} ETH) exceeds total note value ({ticket.amount} ETH)")
 
         net_wei = pool.amount_wei - fee_wei
-        net_eth = net_wei / 10**18
+        net_eth = float(Decimal(net_wei) / (Decimal(10) ** 18))
 
         call = build_withdraw_transaction(
             pool=pool,
@@ -239,7 +254,7 @@ class TransactionBuilder:
             recipient_address=recipient_address,
             relayer_address=relayer_address,
             relayer_fee_wei=fee_wei,
-            relayer_fee_eth=relayer_fee_eth,
+            relayer_fee_eth=float(Decimal(str(relayer_fee_eth))),
             net_recipient_wei=net_wei,
             net_recipient_eth=net_eth,
             calldata=call.data,
@@ -253,14 +268,14 @@ class TransactionBuilder:
         payload: GaslessWithdrawPayload,
         relayer_private_key: str | bytes,
         nonce: int,
-        max_fee_per_gas_gwei: float = 25.0,
-        max_priority_fee_gwei: float = 1.5,
+        max_fee_per_gas_gwei: float | str = 25.0,
+        max_priority_fee_gwei: float | str = 1.5,
         gas_limit: int = 450_000,
     ) -> SignedTransaction:
         """Used by the relayer / self-relayer to sign and broadcast the withdraw payload."""
         calldata_bytes = bytes.fromhex(payload.calldata[2:] if payload.calldata.startswith("0x") else payload.calldata)
-        max_fee_wei = int(max_fee_per_gas_gwei * 10**9)
-        priority_fee_wei = int(max_priority_fee_gwei * 10**9)
+        max_fee_wei = TransactionBuilder._gwei_to_wei(max_fee_per_gas_gwei)
+        priority_fee_wei = TransactionBuilder._gwei_to_wei(max_priority_fee_gwei)
 
         tx = EIP1559Transaction(
             chain_id=payload.chain_id,
@@ -279,8 +294,8 @@ class TransactionBuilder:
         tickets: List[Ticket],
         private_key: str | bytes,
         start_nonce: int = 0,
-        max_fee_per_gas_gwei: float = 25.0,
-        max_priority_fee_gwei: float = 1.5,
+        max_fee_per_gas_gwei: float | str = 25.0,
+        max_priority_fee_gwei: float | str = 1.5,
         gas_limit_per_deposit: int = 1_000_000,
         already_delegated: bool = False,
     ) -> MultiShieldBundle:
@@ -293,7 +308,7 @@ class TransactionBuilder:
             raise ValueError("Cannot build a multi-shield bundle with zero tickets")
 
         eip1559_txs: List[SignedTransaction] = []
-        calls: List[ tuple[str, int, bytes] ] = []
+        calls: List[tuple[str, int, bytes]] = []
         total_wei = 0
         chain_id = tickets[0].chain_id
 
@@ -338,7 +353,7 @@ class TransactionBuilder:
 
 
 # ---------------------------------------------------------------------------
-# EIP-7702 & ERC-4337 v0.8 Simple7702Account Batching (EDW PR #108 Parity)
+# EIP-7702 & ERC-4337 v0.8 Simple7702Account Batching (EDW PR #108 & kohaku-rs Parity)
 # ---------------------------------------------------------------------------
 
 SIMPLE_7702_ACCOUNT_ADDRESS = "0xe6Cae83BdE06E4c305530e199D7217f42808555B"
@@ -346,6 +361,138 @@ SIMPLE_DELEGATE_ADDRESS = "0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA"
 ENTRYPOINT_V08_ADDRESS = "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"
 EIP7702_MAGIC = b"\x05"
 EIP7702_DESIGNATOR_PREFIX = bytes.fromhex("ef0100")
+
+EIP712_DOMAIN_TYPEHASH = keccak(
+    b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+)
+PACKED_USEROP_TYPEHASH = keccak(
+    b"PackedUserOperation(address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData)"
+)
+
+
+def pack_u128_pair(high_128: int, low_128: int) -> bytes:
+    """Packs two 128-bit unsigned integers into a single 32-byte `bytes32` word (`(high << 128) | low`)."""
+    mask = (1 << 128) - 1
+    combined = ((high_128 & mask) << 128) | (low_128 & mask)
+    return combined.to_bytes(32, "big")
+
+
+def compute_packed_user_op_hash_v08(
+    sender: str,
+    nonce: int,
+    init_code: bytes,
+    call_data: bytes,
+    verification_gas_limit: int,
+    call_gas_limit: int,
+    pre_verification_gas: int,
+    max_priority_fee_per_gas: int,
+    max_fee_per_gas: int,
+    paymaster_and_data: bytes,
+    chain_id: int,
+    entry_point: str = ENTRYPOINT_V08_ADDRESS,
+) -> bytes:
+    """Computes the canonical ERC-4337 v0.8 EIP-712 signing hash over `PackedUserOperation`.
+
+    Matches `kohaku-rs` (`crates/userop-kit/src/signable_user_operation.rs` & `entry_point.rs`)
+    bit-for-bit (`domain = {name: "ERC4337", version: "1", chainId, verifyingContract}`).
+    """
+    import eth_abi
+
+    account_gas_limits = pack_u128_pair(verification_gas_limit, call_gas_limit)
+    gas_fees = pack_u128_pair(max_priority_fee_per_gas, max_fee_per_gas)
+
+    domain_separator = keccak(
+        eth_abi.encode(
+            ["bytes32", "bytes32", "bytes32", "uint256", "address"],
+            [
+                EIP712_DOMAIN_TYPEHASH,
+                keccak(b"ERC4337"),
+                keccak(b"1"),
+                chain_id,
+                entry_point.lower(),
+            ],
+        )
+    )
+
+    struct_hash = keccak(
+        eth_abi.encode(
+            [
+                "bytes32",
+                "address",
+                "uint256",
+                "bytes32",
+                "bytes32",
+                "bytes32",
+                "uint256",
+                "bytes32",
+                "bytes32",
+            ],
+            [
+                PACKED_USEROP_TYPEHASH,
+                sender.lower(),
+                nonce,
+                keccak(init_code),
+                keccak(call_data),
+                account_gas_limits,
+                pre_verification_gas,
+                gas_fees,
+                keccak(paymaster_and_data),
+            ],
+        )
+    )
+    return keccak(b"\x19\x01" + domain_separator + struct_hash)
+
+
+def compute_packed_user_op_hash_v07(
+    sender: str,
+    nonce: int,
+    init_code: bytes,
+    call_data: bytes,
+    verification_gas_limit: int,
+    call_gas_limit: int,
+    pre_verification_gas: int,
+    max_priority_fee_per_gas: int,
+    max_fee_per_gas: int,
+    paymaster_and_data: bytes,
+    chain_id: int,
+    entry_point: str = ENTRYPOINT_V08_ADDRESS,
+) -> bytes:
+    """Computes the ERC-4337 v0.7 `userOpHash` (`keccak256(abi.encode(keccak256(packedUserOp), entryPoint, chainId))`)."""
+    import eth_abi
+
+    account_gas_limits = pack_u128_pair(verification_gas_limit, call_gas_limit)
+    gas_fees = pack_u128_pair(max_priority_fee_per_gas, max_fee_per_gas)
+
+    packed_op_hash = keccak(
+        eth_abi.encode(
+            [
+                "address",
+                "uint256",
+                "bytes32",
+                "bytes32",
+                "bytes32",
+                "uint256",
+                "bytes32",
+                "bytes32",
+            ],
+            [
+                sender.lower(),
+                nonce,
+                keccak(init_code),
+                keccak(call_data),
+                account_gas_limits,
+                pre_verification_gas,
+                gas_fees,
+                keccak(paymaster_and_data),
+            ],
+        )
+    )
+    return keccak(
+        eth_abi.encode(
+            ["bytes32", "address", "uint256"],
+            [packed_op_hash, entry_point.lower(), chain_id],
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -403,7 +550,7 @@ class EIP7702Authorization:
 
 @dataclass(frozen=True)
 class UserOperationBatch:
-    """ERC-4337 v0.8 UserOperation wrapping `Simple7702Account.executeBatch`."""
+    """ERC-4337 v0.8 `PackedUserOperation` wrapping `Simple7702Account.executeBatch`."""
 
     sender: str
     chain_id: int
@@ -417,6 +564,18 @@ class UserOperationBatch:
     authorization: Optional[EIP7702Authorization]
     user_op_hash: str
     signature: str
+    init_code: bytes = b""
+    paymaster_and_data: bytes = b""
+
+    @property
+    def account_gas_limits_hex(self) -> str:
+        """Returns `bytes32((verificationGasLimit << 128) | callGasLimit)`."""
+        return "0x" + pack_u128_pair(self.verification_gas_limit, self.call_gas_limit).hex()
+
+    @property
+    def gas_fees_hex(self) -> str:
+        """Returns `bytes32((maxPriorityFeePerGas << 128) | maxFeePerGas)`."""
+        return "0x" + pack_u128_pair(self.max_priority_fee_per_gas, self.max_fee_per_gas).hex()
 
     @classmethod
     def build_and_sign(
@@ -425,9 +584,11 @@ class UserOperationBatch:
         calls: List[tuple[str, int, bytes]],
         private_key: str | bytes,
         account_nonce: int = 0,
-        max_fee_per_gas_gwei: float = 25.0,
-        max_priority_fee_gwei: float = 1.5,
+        max_fee_per_gas_gwei: float | str = 25.0,
+        max_priority_fee_gwei: float | str = 1.5,
         already_delegated: bool = False,
+        init_code: bytes = b"",
+        paymaster_and_data: bytes = b"",
     ) -> UserOperationBatch:
         import eth_abi
 
@@ -463,22 +624,23 @@ class UserOperationBatch:
         call_gas = 950_000 * len(calls)
         ver_gas = 150_000
         pre_ver_gas = 60_000
-        max_fee_wei = int(max_fee_per_gas_gwei * 10**9)
-        prio_fee_wei = int(max_priority_fee_gwei * 10**9)
+        max_fee_wei = TransactionBuilder._gwei_to_wei(max_fee_per_gas_gwei)
+        prio_fee_wei = TransactionBuilder._gwei_to_wei(max_priority_fee_gwei)
 
-        packed = eth_abi.encode(
-            ["address", "uint256", "bytes32", "uint256", "uint256", "address", "uint256"],
-            [
-                sender.lower(),
-                account_nonce,
-                keccak(call_data_bytes),
-                call_gas,
-                max_fee_wei,
-                ENTRYPOINT_V08_ADDRESS.lower(),
-                chain_id,
-            ],
+        op_hash_bytes = compute_packed_user_op_hash_v08(
+            sender=sender,
+            nonce=account_nonce,
+            init_code=init_code,
+            call_data=call_data_bytes,
+            verification_gas_limit=ver_gas,
+            call_gas_limit=call_gas,
+            pre_verification_gas=pre_ver_gas,
+            max_priority_fee_per_gas=prio_fee_wei,
+            max_fee_per_gas=max_fee_wei,
+            paymaster_and_data=paymaster_and_data,
+            chain_id=chain_id,
+            entry_point=ENTRYPOINT_V08_ADDRESS,
         )
-        op_hash_bytes = keccak(packed)
         v, r, s = sign_transaction_hash(key_obj, op_hash_bytes)
         sig_bytes = r.to_bytes(32, "big") + s.to_bytes(32, "big") + bytes([v + 27])
 
@@ -495,6 +657,8 @@ class UserOperationBatch:
             authorization=auth,
             user_op_hash="0x" + op_hash_bytes.hex(),
             signature="0x" + sig_bytes.hex(),
+            init_code=init_code,
+            paymaster_and_data=paymaster_and_data,
         )
 
     def to_rpc_dict(self) -> dict[str, Any]:
