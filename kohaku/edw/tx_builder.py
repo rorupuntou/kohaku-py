@@ -17,7 +17,8 @@ from eth_keys import keys
 import rlp
 
 from kohaku.edw.tickets import Ticket
-from kohaku.tornado.pools import get_pool
+from kohaku.tornado.pools import TOKEN_ADDRESSES, format_amount, get_pool
+from kohaku.tornado.tx import build_erc20_approve_call, build_erc20_transfer_call
 from kohaku.tornado.withdraw import build_withdraw_transaction
 
 
@@ -302,7 +303,7 @@ class TransactionBuilder:
         """Build a Dual Multi-Shield Bundle (ERC-4337 + EIP-7702 UserOperation AND EIP-1559 sequence).
 
         Matches EDW PR #108 (`submit_user_operation` over `Simple7702SmartAccount::executeBatch`)
-        while also pre-signing sequential EIP-1559 transactions for sovereign P2P/Tor fallback.
+        and feat/erc20-shield-unshield for ERC-20 token approval and deposit batching.
         """
         if not tickets:
             raise ValueError("Cannot build a multi-shield bundle with zero tickets")
@@ -311,27 +312,69 @@ class TransactionBuilder:
         calls: List[tuple[str, int, bytes]] = []
         total_wei = 0
         chain_id = tickets[0].chain_id
+        token = (getattr(tickets[0], "currency", "ETH") or "ETH").upper()
+        current_nonce = start_nonce
 
         for idx, ticket in enumerate(tickets):
             pool = get_pool(ticket.pool_id)
             total_wei += pool.amount_wei
             commitment_clean = ticket.commitment_hex.lower().replace("0x", "").zfill(64)
             calldata = bytes.fromhex("b214faa5" + commitment_clean)
-            calls.append((pool.contract_address, pool.amount_wei, calldata))
 
-            signed_tx = TransactionBuilder.build_deposit_tx(
-                commitment_hex=ticket.commitment_hex,
-                pool_id=ticket.pool_id,
-                nonce=start_nonce + idx,
-                private_key=private_key,
-                max_fee_per_gas_gwei=max_fee_per_gas_gwei,
-                max_priority_fee_gwei=max_priority_fee_gwei,
-                gas_limit=gas_limit_per_deposit,
-            )
-            eip1559_txs.append(signed_tx)
+            if pool.asset == "ETH":
+                calls.append((pool.contract_address, pool.amount_wei, calldata))
+                signed_tx = TransactionBuilder.build_deposit_tx(
+                    commitment_hex=ticket.commitment_hex,
+                    pool_id=ticket.pool_id,
+                    nonce=current_nonce,
+                    private_key=private_key,
+                    max_fee_per_gas_gwei=max_fee_per_gas_gwei,
+                    max_priority_fee_gwei=max_priority_fee_gwei,
+                    gas_limit=gas_limit_per_deposit,
+                )
+                eip1559_txs.append(signed_tx)
+                current_nonce += 1
+            else:
+                # ERC-20 token deposit requires approveCall + depositCall
+                token_addr = TOKEN_ADDRESSES.get((pool.chain_id, pool.asset), pool.contract_address)
+                approve_call = build_erc20_approve_call(token_addr, pool.contract_address, pool.amount_wei)
+                approve_bytes = bytes.fromhex(approve_call.data[2:])
+
+                # In UserOp batch: executeBatch approves then deposits
+                calls.append((token_addr, 0, approve_bytes))
+                calls.append((pool.contract_address, 0, calldata))
+
+                # In sequential EIP-1559 fallback:
+                # Tx 1: approve
+                tx_approve = EIP1559Transaction(
+                    chain_id=pool.chain_id,
+                    nonce=current_nonce,
+                    max_priority_fee_per_gas=TransactionBuilder._gwei_to_wei(max_priority_fee_gwei),
+                    max_fee_per_gas=TransactionBuilder._gwei_to_wei(max_fee_per_gas_gwei),
+                    gas_limit=100_000,
+                    to=token_addr,
+                    value=0,
+                    data=approve_bytes,
+                ).sign(private_key)
+                eip1559_txs.append(tx_approve)
+                current_nonce += 1
+
+                # Tx 2: deposit
+                tx_deposit = EIP1559Transaction(
+                    chain_id=pool.chain_id,
+                    nonce=current_nonce,
+                    max_priority_fee_per_gas=TransactionBuilder._gwei_to_wei(max_priority_fee_gwei),
+                    max_fee_per_gas=TransactionBuilder._gwei_to_wei(max_fee_per_gas_gwei),
+                    gas_limit=gas_limit_per_deposit,
+                    to=pool.contract_address,
+                    value=0,
+                    data=calldata,
+                ).sign(private_key)
+                eip1559_txs.append(tx_deposit)
+                current_nonce += 1
 
         user_op: Optional[UserOperationBatch] = None
-        if len(tickets) > 1:
+        if len(calls) > 1:
             user_op = UserOperationBatch.build_and_sign(
                 chain_id=chain_id,
                 calls=calls,
@@ -349,7 +392,19 @@ class TransactionBuilder:
             total_wei=total_wei,
             user_operation=user_op,
             eip1559_txs=eip1559_txs,
+            token=token,
         )
+
+    @staticmethod
+    def build_erc20_forward_call(
+        token_address: str, recipient_address: str, amount_raw: int
+    ) -> tuple[str, int, bytes]:
+        """Builds a UserOpCall tuple (target, value, data) for ERC-20 token forwarding.
+
+        Matches `edw_core::vault::tornadocash::userop::forward_calls`.
+        """
+        call = build_erc20_transfer_call(token_address, recipient_address, amount_raw)
+        return (token_address.lower(), 0, bytes.fromhex(call.data[2:]))
 
 
 # ---------------------------------------------------------------------------
@@ -688,10 +743,15 @@ class MultiShieldBundle:
     total_wei: int
     user_operation: Optional[UserOperationBatch]
     eip1559_txs: List[SignedTransaction]
+    token: str = "ETH"
+
+    @property
+    def total_amount_str(self) -> str:
+        pool = get_pool(self.tickets[0].pool_id) if self.tickets else None
+        decimals = pool.decimals if pool else 18
+        return format_amount(self.total_wei, decimals)
 
     @property
     def total_eth_str(self) -> str:
-        from decimal import Decimal
-        val = (Decimal(self.total_wei) / (Decimal(10) ** 18)).normalize()
-        return format(val, "f")
+        return self.total_amount_str
 

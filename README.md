@@ -39,10 +39,13 @@ kohaku tui
 - **Railgun Multi-Tree UTXO Engine & `0zk` Bech32m Addresses (`kohaku.railgun`)**:
   - Pure-Python **Bech32m (`0x2bc830a3`)** encoder/decoder for 73-byte `0zk1qy...` shielded addresses (`edw railgun address`).
   - Stateful multi-tree UTXO chainstate auditor (`RailgunVault`) supporting both Era 1 (`v1/v2.0`) and Era 2 (`v2.1+`) `RailgunSmartWallet` (`0xfa7093cdd9ee6932b4eb2c9e1cde7ce00b1fa4b9`) events (`Shield`, `Transact`, `Nullified`, `Unshield`) and pre-indexed `railgun-1-ops` `NxM` circuit topologies (`edw railgun audit`).
-- **Extended ETH Denominations & Multi-Shield Bundling**:
-  - Supports all 9 native ETH Tornado pools on Mainnet & Sepolia (`0.01`, `0.03`, `0.1`, `0.3`, `1`, `3`, `10`, `30`, `100` ETH) with greedy amount decomposition (`33.34 ETH` $\rightarrow$ `[30, 3, 0.3, 0.03, 0.01]`).
-  - **Dual Multi-Shield Engine (`edw shield`)**: Bundles multi-note deposits into a single atomic ERC-4337 v0.8 `UserOperation` (`Simple7702Account.executeBatch` + signed EIP-7702 authorization) while simultaneously generating sequential EIP-1559 raw transactions for zero-bundler P2P/Tor fallback.
-  - **Smart Coin Selection (`edw unshield`)**: Supports both `exact` denomination matching and largest-first `cover` note selection across held `MINED` notes.
+- **Extended ETH & ERC-20 Pools & Multi-Shield Bundling**:
+  - Supports all 9 native ETH Tornado pools on Mainnet & Sepolia (`0.01`, `0.03`, `0.1`, `0.3`, `1`, `3`, `10`, `30`, `100` ETH) and all standard ERC-20 pools (**DAI** [100, 1k, 10k, 100k], **USDC** [100, 1k], **USDT** [100, 1k], **WBTC** [0.1, 1, 10]) with greedy token-decimal decomposition (`edw shield --token USDC --amount 1500`).
+  - **Dual Multi-Shield Engine (`edw shield`)**: Bundles multi-note deposits into a single atomic ERC-4337 v0.8 `UserOperation` (`Simple7702Account.executeBatch` with automatic `approve(spender, amount)` + `deposit(commitment)` calls + signed EIP-7702 authorization) while simultaneously generating sequential EIP-1559 raw transactions for zero-bundler P2P/Tor fallback.
+  - **ERC-20 Gasless Unshielding & Sponsorship (`edw unshield`)**: Requires an unspent shielded ETH note with paymaster to sponsor entrypoint gas fees, forward-calling `transfer(recipient, amount)` for pure zero-leakage token delivery.
+  - **Smart Coin Selection**: Supports both `exact` denomination matching and largest-first `cover` note selection across held `MINED` notes.
+- **Scriptable Automation & Password Files**:
+  - Global `--password-file <path>` support across all commands for zero-prompt scripting, headless CI, and automated ops.
 - **Anonymous Invoices (`edw-invoice:v1:...`) & Tor / SOCKS5 Tunneling**:
   - Native RFC 1928 SOCKS5 client in pure Python (`--tor-proxy 127.0.0.1:9050`).
 - **ZK Cryptography & Protocols**:
@@ -78,12 +81,14 @@ nix develop
 edw profile new --name cypherpunk
 edw next-fresh-address --peek
 
-# 2. Multi-Shield arbitrary ETH amount (greedy decomposition + Dual EIP-7702 UserOp / EIP-1559)
+# 2. Multi-Shield arbitrary ETH or ERC-20 token (greedy decomposition + Dual EIP-7702 UserOp / EIP-1559)
 edw shield --amount 33.34 --label "Vault-Deposit"
+edw shield --token USDC --amount 1100 --label "USDC-Vault" --password-file /path/to/password.txt
 
 # 3. Probe live on-chain Tornado Cash Relayers (/v1/status) & auto-select lowest fee on unshield
 edw relayers --probe
 edw unshield --amount 3.31 --to 0xVirginRecipient... --exact --auto-relayer
+edw unshield --token USDC --amount 1100 --to 0xVirginRecipient... --password-file /path/to/password.txt
 
 # 4. Encode / decode Railgun 0zk1... Bech32m addresses & audit Railgun UTXO chainstate
 edw railgun address --decode 0zk1qy...
@@ -222,43 +227,51 @@ pytest -v
 
 ```
 tests/test_crypto.py::test_mimc_constants PASSED                         [  2%]
-tests/test_crypto.py::test_tornado_zero_value_propagation PASSED         [  5%]
-tests/test_crypto.py::test_poseidon PASSED                               [  8%]
+tests/test_crypto.py::test_tornado_zero_value_propagation PASSED         [  4%]
+tests/test_crypto.py::test_poseidon PASSED                               [  6%]
+tests/test_crypto.py::test_pedersen_hash_kohaku_rs_parity PASSED         [  9%]
 tests/test_edw_cli.py::test_edw_cli_full_workflow PASSED                 [ 11%]
 tests/test_edw_cli.py::test_edw_cli_shield_unshield_and_network PASSED   [ 13%]
-tests/test_edw_p2p.py::test_socks5_handshake_mock_server PASSED          [ 16%]
-tests/test_edw_p2p.py::test_p2p_broadcaster_with_failover PASSED         [ 19%]
-tests/test_edw_p2p.py::test_dispatch_gasless_withdrawal PASSED           [ 22%]
-tests/test_edw_storage.py::test_blinded_cipher_lifecycle PASSED          [ 25%]
-tests/test_edw_storage.py::test_encrypted_database_disk_zero_leakage PASSED [ 27%]
-tests/test_edw_storage.py::test_keyring_manager_and_fresh_address_rotation PASSED [ 30%]
-tests/test_edw_tickets.py::test_ticket_draft_and_invoice_generation PASSED [ 33%]
+tests/test_edw_cli.py::test_edw_cli_erc20_shield_and_unshield PASSED     [ 15%]
+tests/test_edw_p2p.py::test_socks5_handshake_mock_server PASSED          [ 18%]
+tests/test_edw_p2p.py::test_socks5_domain_atyp3_no_dns_leak_and_short_reads PASSED [ 20%]
+tests/test_edw_p2p.py::test_p2p_broadcaster_with_failover PASSED         [ 22%]
+tests/test_edw_p2p.py::test_dispatch_gasless_withdrawal PASSED           [ 25%]
+tests/test_edw_storage.py::test_blinded_cipher_lifecycle PASSED          [ 27%]
+tests/test_edw_storage.py::test_encrypted_database_disk_zero_leakage PASSED [ 29%]
+tests/test_edw_storage.py::test_keyring_manager_and_fresh_address_rotation PASSED [ 31%]
+tests/test_edw_tickets.py::test_ticket_draft_and_invoice_generation PASSED [ 34%]
 tests/test_edw_tickets.py::test_ticket_manager_encrypted_lifecycle PASSED [ 36%]
 tests/test_edw_tickets.py::test_multi_shield_and_coin_selection PASSED   [ 38%]
-tests/test_edw_tx_builder.py::test_eip1559_transaction_signing_and_recovery PASSED [ 41%]
-tests/test_edw_tx_builder.py::test_build_deposit_transaction PASSED      [ 44%]
-tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcast PASSED [ 47%]
-tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED       [ 50%]
-tests/test_merkle.py::test_merkle_tree_proofs PASSED                     [ 52%]
-tests/test_privacy_pools.py::test_privacy_pool_note PASSED               [ 55%]
-tests/test_privacy_pools.py::test_association_set PASSED                 [ 58%]
-tests/test_privacy_pools.py::test_privacy_pools_registry PASSED          [ 61%]
-tests/test_privacy_pools.py::test_saga_v2_event_and_ed25519_manifest_signature PASSED [ 63%]
-tests/test_privacy_pools.py::test_local_dir_sync_and_onchain_root_verification PASSED [ 66%]
-tests/test_railgun.py::test_railgun_0zk_bech32m_address_roundtrip PASSED [ 69%]
+tests/test_edw_tx_builder.py::test_eip1559_transaction_signing_and_recovery PASSED [ 40%]
+tests/test_edw_tx_builder.py::test_build_deposit_transaction PASSED      [ 43%]
+tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcast PASSED [ 45%]
+tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED       [ 47%]
+tests/test_edw_tx_builder.py::test_packed_user_operation_v08_eip712_hash_kohaku_rs_vector PASSED [ 50%]
+tests/test_edw_tx_builder.py::test_erc20_multi_shield_bundle_and_forward_call PASSED [ 52%]
+tests/test_merkle.py::test_merkle_tree_proofs PASSED                     [ 54%]
+tests/test_merkle.py::test_lean_imt_dynamic_tree_and_proofs PASSED       [ 56%]
+tests/test_privacy_pools.py::test_privacy_pool_note PASSED               [ 59%]
+tests/test_privacy_pools.py::test_association_set PASSED                 [ 61%]
+tests/test_privacy_pools.py::test_privacy_pools_registry PASSED          [ 63%]
+tests/test_privacy_pools.py::test_saga_v2_event_and_ed25519_manifest_signature PASSED [ 65%]
+tests/test_privacy_pools.py::test_local_dir_sync_and_onchain_root_verification PASSED [ 68%]
+tests/test_railgun.py::test_railgun_0zk_bech32m_address_roundtrip PASSED [ 70%]
 tests/test_railgun.py::test_railgun_vault_operations_and_events PASSED   [ 72%]
 tests/test_stealth.py::test_stealth_keypair_derivation PASSED            [ 75%]
 tests/test_stealth.py::test_erc5564_scheme1_lifecycle PASSED             [ 77%]
-tests/test_tornado.py::test_tornado_note_creation_and_parsing PASSED     [ 80%]
-tests/test_tornado.py::test_tornado_pools PASSED                         [ 83%]
-tests/test_tornado.py::test_keychain_derivation PASSED                   [ 86%]
-tests/test_tornado.py::test_deposit_transactions PASSED                  [ 88%]
-tests/test_tornado.py::test_circuit_inputs_and_withdraw_transaction PASSED [ 91%]
-tests/test_tornado.py::test_relayer_registry_vault_and_ens_resolution PASSED [ 94%]
-tests/test_tornado.py::test_relayer_status_quote_and_auto_selection PASSED [ 97%]
+tests/test_tornado.py::test_tornado_note_creation_and_parsing PASSED     [ 79%]
+tests/test_tornado.py::test_tornado_pools PASSED                         [ 81%]
+tests/test_tornado.py::test_keychain_derivation PASSED                   [ 84%]
+tests/test_tornado.py::test_deposit_transactions PASSED                  [ 86%]
+tests/test_tornado.py::test_circuit_inputs_and_withdraw_transaction PASSED [ 88%]
+tests/test_tornado.py::test_relayer_registry_vault_and_ens_resolution PASSED [ 90%]
+tests/test_tornado.py::test_relayer_status_quote_and_auto_selection PASSED [ 93%]
+tests/test_tornado.py::test_erc20_token_catalog_selection_units_and_denominations PASSED [ 95%]
+tests/test_tornado.py::test_erc20_withdrawals_do_not_mix_assets_and_require_eth_sponsor PASSED [ 97%]
 tests/test_tui.py::test_tui_app_mount_and_headless PASSED                [100%]
 
-============================== 36 passed in 4.81s ==============================
+============================== 44 passed in 5.70s ==============================
 ```
 
 ---

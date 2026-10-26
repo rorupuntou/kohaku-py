@@ -175,3 +175,48 @@ def test_packed_user_operation_v08_eip712_hash_kohaku_rs_vector():
     )
 
 
+def test_erc20_multi_shield_bundle_and_forward_call():
+    """Verifies batching of ERC-20 approval + deposits and token forwarding matching desktop-wallet."""
+    from eth_account import Account
+    from kohaku.edw.tickets import Ticket
+    from kohaku.edw.tx_builder import TransactionBuilder
+    from kohaku.tornado.pools import TOKEN_ADDRESSES
+
+    depositor = Account.create()
+    tickets = [
+        Ticket.create_draft(currency="USDC", amount="100", chain_id=1),
+        Ticket.create_draft(currency="USDC", amount="1000", chain_id=1),
+    ]
+
+    bundle = TransactionBuilder.build_multi_shield_bundle(
+        tickets=tickets,
+        private_key=depositor.key,
+        start_nonce=10,
+    )
+
+    assert bundle.token == "USDC"
+    assert bundle.total_amount_str == "1100"
+    # Each ERC-20 note requires an approve tx and a deposit tx -> 4 sequential EIP-1559 txs
+    assert len(bundle.eip1559_txs) == 4
+    assert [tx.nonce for tx in bundle.eip1559_txs] == [10, 11, 12, 13]
+    for tx in bundle.eip1559_txs:
+        assert Account.recover_transaction(tx.raw_hex).lower() == depositor.address.lower()
+
+    # UserOperation executeBatch encodes 4 calls (approve, deposit, approve, deposit)
+    assert bundle.user_operation is not None
+    assert bundle.user_operation.call_data.startswith("0x34fcd5be")
+
+    # Verify ERC-20 forward call uses transfer(to, amount)
+    recipient = Account.create().address
+    usdc_addr = TOKEN_ADDRESSES[(1, "USDC")]
+    target, val, data = TransactionBuilder.build_erc20_forward_call(
+        token_address=usdc_addr,
+        recipient_address=recipient,
+        amount_raw=100_000_000,
+    )
+    assert target.lower() == usdc_addr.lower()
+    assert val == 0
+    assert data.hex().startswith("a9059cbb")  # transfer(address,uint256)
+    assert recipient.lower().removeprefix("0x") in data.hex()
+
+

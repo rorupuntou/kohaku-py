@@ -26,7 +26,15 @@ from kohaku.edw.storage.database import EncryptedDatabase
 from kohaku.edw.storage.keyring import KeyringManager
 from kohaku.edw.tickets import TicketInvoice, TicketManager, TicketState
 from kohaku.edw.tx_builder import TransactionBuilder
-from kohaku.tornado.pools import MAINNET_POOLS, get_pool, parse_eth
+from kohaku.tornado.pools import (
+    MAINNET_POOLS,
+    format_amount,
+    get_pool,
+    parse_amount,
+    parse_eth,
+    resolve_asset,
+    withdrawal_notes,
+)
 
 
 def get_default_data_dir() -> Path:
@@ -36,11 +44,31 @@ def get_default_data_dir() -> Path:
     return Path.home() / ".edw"
 
 
-def open_or_init_database(data_dir: Path, chain_id: int, password: Optional[str] = None) -> EncryptedDatabase:
+def _resolve_password(args: argparse.Namespace) -> Optional[str]:
+    if getattr(args, "password", None):
+        return args.password
+    pw_file = getattr(args, "password_file", None)
+    if pw_file and Path(pw_file).exists():
+        return Path(pw_file).read_text(encoding="utf-8").strip()
+    return os.environ.get("EDW_PASSWORD")
+
+
+def open_or_init_database(
+    data_dir: Path,
+    chain_id: int,
+    password: Optional[str] = None,
+    password_file: Optional[Path] = None,
+) -> EncryptedDatabase:
+    if not password and password_file and Path(password_file).exists():
+        password = Path(password_file).read_text(encoding="utf-8").strip()
+    if not password:
+        password = os.environ.get("EDW_PASSWORD")
+
     net_dir = data_dir / str(chain_id)
     if not (net_dir / EncryptedDatabase.HEADER_FILE).exists():
         if not password:
             import getpass
+
             password = getpass.getpass("Initialize new EDW datastore password: ")
             confirm = getpass.getpass("Confirm password: ")
             if password != confirm:
@@ -49,6 +77,7 @@ def open_or_init_database(data_dir: Path, chain_id: int, password: Optional[str]
 
     if not password:
         import getpass
+
         password = getpass.getpass("Enter EDW decryption password: ")
     return EncryptedDatabase.open(net_dir, password)
 
@@ -230,23 +259,30 @@ def cmd_invoice_pay(args: argparse.Namespace) -> int:
 
 
 def cmd_shield(args: argparse.Namespace) -> int:
-    db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
+    password = _resolve_password(args)
+    db = open_or_init_database(args.data_dir, args.chain_id, password=password)
     tm = TicketManager(db, profile_m=0, profile_x=0)
 
-    amount_wei = parse_eth(args.amount)
+    token_str = getattr(args, "token", "ETH") or "ETH"
+    asset_info = resolve_asset(token_str, args.chain_id)
+    token_symbol = asset_info["symbol"]
+    decimals = asset_info["decimals"]
+    amount_raw = parse_amount(args.amount, decimals)
+
     tickets = tm.create_multi_shield_tickets(
-        amount_wei=amount_wei,
+        amount_wei=amount_raw,
         chain_id=args.chain_id,
+        currency=token_symbol,
         label=args.label or "Multi-Shield",
     )
 
     print("════════════════════════════════════════════════════════════════════════════")
     print("                  EDW-PY MULTI-SHIELD DECOMPOSITION                         ")
     print("════════════════════════════════════════════════════════════════════════════")
-    print(f"Total Amount:        {args.amount} ETH ({amount_wei} wei)")
-    print(f"Decomposed Notes:    {len(tickets)} note(s) -> {[t.amount + ' ETH' for t in tickets]}")
+    print(f"Total Amount:        {args.amount} {token_symbol} ({amount_raw} base units)")
+    print(f"Decomposed Notes:    {len(tickets)} note(s) -> {[t.amount + ' ' + token_symbol for t in tickets]}")
     for idx, t in enumerate(tickets):
-        print(f"  [{idx + 1}] {t.amount:<5} ETH | Pool: {t.pool_id} | Commitment: {t.commitment_hex[:20]}...")
+        print(f"  [{idx + 1}] {t.amount:<5} {token_symbol} | Pool: {t.pool_id} | Commitment: {t.commitment_hex[:20]}...")
 
     priv_key = _resolve_private_key(args, db=db)
     if not priv_key:
@@ -303,15 +339,26 @@ def cmd_relayers(args: argparse.Namespace) -> int:
 def cmd_unshield(args: argparse.Namespace) -> int:
     import secrets
 
-    db = open_or_init_database(args.data_dir, args.chain_id, password=args.password)
+    password = _resolve_password(args)
+    db = open_or_init_database(args.data_dir, args.chain_id, password=password)
     tm = TicketManager(db, profile_m=0, profile_x=0)
 
-    amount_wei = parse_eth(args.amount)
-    if args.exact:
-        selected = tm.select_exact_tickets(amount_wei, currency="ETH", chain_id=args.chain_id)
+    token_str = getattr(args, "token", "ETH") or "ETH"
+    asset_info = resolve_asset(token_str, args.chain_id)
+    token_symbol = asset_info["symbol"]
+    decimals = asset_info["decimals"]
+    amount_raw = parse_amount(args.amount, decimals)
+
+    held = tm.list_tickets(state=TicketState.MINED)
+    if token_symbol != "ETH":
+        # Withdrawal notes selects token notes and prepends the ETH sponsor note
+        selected = withdrawal_notes(amount_raw, held, token_symbol, args.chain_id)
+        mode_str = f"SPONSORED ERC-20 ({token_symbol})"
+    elif args.exact:
+        selected = tm.select_exact_tickets(amount_raw, currency="ETH", chain_id=args.chain_id)
         mode_str = "EXACT MATCH"
     else:
-        selected = tm.select_cover_tickets(amount_wei, currency="ETH", chain_id=args.chain_id)
+        selected = tm.select_cover_tickets(amount_raw, currency="ETH", chain_id=args.chain_id)
         mode_str = "COVER (LARGEST-FIRST)"
 
     quote = None
@@ -323,35 +370,44 @@ def cmd_unshield(args: argparse.Namespace) -> int:
         quote = RelayerRegistryVault.select_best_relayer(socks5_proxy=args.tor_proxy)
 
     jitter_max = getattr(args, "jitter", 0) or 0
-    total_selected_wei = sum(t.amount_wei for t in selected)
     print("════════════════════════════════════════════════════════════════════════════")
     print(f"                  EDW-PY UNSHIELD COIN SELECTION ({mode_str})")
     print("════════════════════════════════════════════════════════════════════════════")
     print(f"Target Recipient:    {args.to}")
-    print(f"Requested Amount:    {args.amount} ETH ({amount_wei} wei)")
-    print(f"Selected Notes ({len(selected)}): {total_selected_wei / 1e18:.4f} ETH total")
-    if quote is not None:
-        print(f"Selected Relayer:    {quote.base_url} (Reward: {quote.reward_account})")
-        print(f"Relayer Service Fee: {quote.service_fee_percent:.3f}%")
-    if len(selected) > 1:
-        print(
-            "[OPSEC WARNING] Unshielding multiple notes to the same recipient in a burst allows "
-            "amount/timing graph correlation. Use `--jitter <sec>` and fresh recipient addresses."
-        )
-    cum_delay = 0
-    for idx, t in enumerate(selected):
-        fee_info = ""
+    print(f"Requested Amount:    {args.amount} {token_symbol} ({amount_raw} base units)")
+    if token_symbol != "ETH":
+        print(f"Selected Notes ({len(selected)}):")
+        sponsor = selected[0]
+        print(f"  • [SPONSOR] {sponsor.amount} ETH note pays gas through Tornado paymaster")
+        for idx, t in enumerate(selected[1:], start=1):
+            print(f"  • [TAIL #{idx}] {t.amount} {t.currency} note | Leaf: #{t.leaf_index} | Comm: {t.commitment_hex[:16]}...")
         if quote is not None:
-            fee_wei = quote.compute_fee_wei(t.amount_wei)
-            net_wei = max(0, t.amount_wei - fee_wei)
-            fee_info = f" | Fee: {fee_wei / 1e18:.6f} ETH | Net: {net_wei / 1e18:.6f} ETH"
-        jitter_info = ""
-        if jitter_max > 0 and idx > 0:
-            cum_delay += secrets.randbelow(jitter_max) + 1
-            jitter_info = f" | Jitter Delay: +{cum_delay}s"
-        print(
-            f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}{jitter_info}"
-        )
+            print(f"Selected Relayer:    {quote.base_url} (Reward: {quote.reward_account})")
+    else:
+        total_selected_wei = sum(t.amount_wei for t in selected)
+        print(f"Selected Notes ({len(selected)}): {total_selected_wei / 1e18:.4f} ETH total")
+        if quote is not None:
+            print(f"Selected Relayer:    {quote.base_url} (Reward: {quote.reward_account})")
+            print(f"Relayer Service Fee: {quote.service_fee_percent:.3f}%")
+        if len(selected) > 1:
+            print(
+                "[OPSEC WARNING] Unshielding multiple notes to the same recipient in a burst allows "
+                "amount/timing graph correlation. Use `--jitter <sec>` and fresh recipient addresses."
+            )
+        cum_delay = 0
+        for idx, t in enumerate(selected):
+            fee_info = ""
+            if quote is not None:
+                fee_wei = quote.compute_fee_wei(t.amount_wei)
+                net_wei = max(0, t.amount_wei - fee_wei)
+                fee_info = f" | Fee: {fee_wei / 1e18:.6f} ETH | Net: {net_wei / 1e18:.6f} ETH"
+            jitter_info = ""
+            if jitter_max > 0 and idx > 0:
+                cum_delay += secrets.randbelow(jitter_max) + 1
+                jitter_info = f" | Jitter Delay: +{cum_delay}s"
+            print(
+                f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}{jitter_info}"
+            )
     print("════════════════════════════════════════════════════════════════════════════")
     return 0
 
@@ -484,6 +540,7 @@ def main() -> None:
     parser.add_argument("--data-dir", default=get_default_data_dir(), type=Path, help="Storage datastore directory")
     parser.add_argument("--chain-id", default=1, type=int, help="Network chain ID (1 for mainnet, 11155111 for sepolia)")
     parser.add_argument("--password", help="Decryption password (omit to prompt securely)")
+    parser.add_argument("--password-file", type=Path, help="Path to file containing decryption password")
     parser.add_argument("--tor-proxy", default=None, help="Tor SOCKS5 proxy (e.g. 127.0.0.1:9050)")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -533,8 +590,9 @@ def main() -> None:
     inv_pay.set_defaults(func=cmd_invoice_pay)
 
     # shield (multi-note greedy packing + Dual UserOp / EIP-1559)
-    sh_p = subparsers.add_parser("shield", help="Decompose and shield arbitrary ETH amounts into Tornado notes")
-    sh_p.add_argument("--amount", required=True, help="Decimal ETH amount (e.g. 33.34)")
+    sh_p = subparsers.add_parser("shield", help="Decompose and shield arbitrary ETH/ERC20 amounts into Tornado notes")
+    sh_p.add_argument("--amount", required=True, help="Decimal token/ETH amount (e.g. 33.34 or 1100)")
+    sh_p.add_argument("--token", default="ETH", help="Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC")
     sh_p.add_argument("--label", default="Multi-Shield", help="Label prefix for created notes")
     sh_p.add_argument("--private-key", help="Optional private key to sign Dual UserOp + EIP-1559 bundle")
     sh_p.add_argument("--prompt-key", action="store_true", help="Prompt securely for signing key via getpass (OPSEC recommended)")
@@ -543,8 +601,9 @@ def main() -> None:
     sh_p.set_defaults(func=cmd_shield)
 
     # unshield (exact / cover coin selection over held MINED notes)
-    un_p = subparsers.add_parser("unshield", help="Select held MINED notes to unshield a target ETH amount")
-    un_p.add_argument("--amount", required=True, help="Decimal ETH amount to unshield (e.g. 1.1)")
+    un_p = subparsers.add_parser("unshield", help="Select held MINED notes to unshield a target ETH/ERC20 amount")
+    un_p.add_argument("--amount", required=True, help="Decimal token/ETH amount to unshield (e.g. 1.1 or 100)")
+    un_p.add_argument("--token", default="ETH", help="Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC")
     un_p.add_argument("--to", required=True, help="Recipient Ethereum address (0x...)")
     un_p.add_argument("--exact", action="store_true", help="Require exact denomination match instead of cover")
     un_p.add_argument(

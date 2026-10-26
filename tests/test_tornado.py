@@ -1,3 +1,4 @@
+import pytest
 from kohaku.crypto.bn254 import P
 from kohaku.tornado.circuit import CircuitInputs, solidity_proof_from_snarkjs
 from kohaku.tornado.note import TornadoNote
@@ -252,4 +253,130 @@ def test_relayer_status_quote_and_auto_selection(monkeypatch):
     expected_service = (10 * 10**18 * 36) // 10_000
     expected_gas = int(1.5 * 1e9) * 350_000
     assert fee_wei == expected_service + expected_gas
+
+
+def test_erc20_token_catalog_selection_units_and_denominations():
+    """Matches `token_tests` in `edw_core::vault::tornadocash::amount`."""
+    from kohaku.tornado.pools import (
+        deposit_pools_for_asset,
+        format_amount,
+        parse_amount,
+        resolve_asset,
+    )
+
+    cases = [
+        ("USDC", 1, "1100", 6, 2),
+        ("usdt", 1, "100", 6, 1),
+        ("DAI", 1, "11100", 18, 3),
+        ("WBTC", 1, "1.1", 8, 2),
+        ("dai", 11_155_111, "100", 18, 1),
+        ("ETH", 1, "1.1", 18, 2),
+    ]
+
+    for symbol, chain, amount_str, decimals, count in cases:
+        asset = resolve_asset(symbol, chain)
+        assert asset["decimals"] == decimals
+        raw = parse_amount(amount_str, decimals)
+        assert format_amount(raw, decimals) == amount_str
+        pools = deposit_pools_for_asset(raw, chain, symbol)
+        assert len(pools) == count
+        assert all(p.asset.upper() == asset["symbol"] and p.chain_id == chain for p in pools)
+        assert sum(p.amount_wei for p in pools) == raw
+
+    # Unsupported or non-existent tokens
+    for symbol in ["USDC", "USDT", "WBTC", "DOGE"]:
+        with pytest.raises(ValueError):
+            resolve_asset(symbol, 11_155_111)
+
+    # Invalid amount formats
+    for value in ["-1", "+1", "1e6", ".1", "1.", "1.0000001", "1..0"]:
+        with pytest.raises(ValueError):
+            parse_amount(value, 6)
+
+    # 1 satoshi
+    assert parse_amount("0.00000001", 8) == 1
+    # Denomination mismatch
+    with pytest.raises(ValueError):
+        deposit_pools_for_asset(1, 1, "USDC")
+
+
+def test_erc20_withdrawals_do_not_mix_assets_and_require_eth_sponsor():
+    """Matches `withdrawals_do_not_mix_assets` in `edw_core::vault::tornadocash::amount`."""
+    from dataclasses import dataclass
+    from kohaku.tornado.pools import (
+        get_pool,
+        parse_amount,
+        withdrawal_notes,
+    )
+
+    @dataclass
+    class MockNote:
+        pool_id: str
+        currency: str
+        amount_wei: int
+        chain_id: int
+        leaf_index: int | None
+        spent: bool
+        paymaster_address: str | None = None
+
+    usdc_100_pool = get_pool("tornado-cash-1-usdc-100")
+    usdt_100_pool = get_pool("tornado-cash-1-usdt-100")
+    eth_01_pool = get_pool("tornado-cash-1-eth-0.1")
+
+    valid_usdc = MockNote(
+        pool_id=usdc_100_pool.id,
+        currency="USDC",
+        amount_wei=usdc_100_pool.amount_wei,
+        chain_id=1,
+        leaf_index=0,
+        spent=False,
+        paymaster_address=usdc_100_pool.paymaster_address,
+    )
+    valid_usdt = MockNote(
+        pool_id=usdt_100_pool.id,
+        currency="USDT",
+        amount_wei=usdt_100_pool.amount_wei,
+        chain_id=1,
+        leaf_index=1,
+        spent=False,
+    )
+    pending_usdc = MockNote(
+        pool_id=usdc_100_pool.id,
+        currency="USDC",
+        amount_wei=usdc_100_pool.amount_wei,
+        chain_id=1,
+        leaf_index=None,  # pending
+        spent=False,
+    )
+    spent_usdc = MockNote(
+        pool_id=usdc_100_pool.id,
+        currency="USDC",
+        amount_wei=usdc_100_pool.amount_wei,
+        chain_id=1,
+        leaf_index=2,
+        spent=True,
+    )
+    eth_sponsor = MockNote(
+        pool_id=eth_01_pool.id,
+        currency="ETH",
+        amount_wei=eth_01_pool.amount_wei,
+        chain_id=1,
+        leaf_index=3,
+        spent=False,
+        paymaster_address=eth_01_pool.paymaster_address,
+    )
+
+    held = [valid_usdc, valid_usdt, pending_usdc, spent_usdc, eth_sponsor]
+    amount = parse_amount("100", 6)
+
+    # Must select ETH sponsor note at index 0 and USDC token note at index 1
+    selected = withdrawal_notes(amount, held, "USDC", chain_id=1)
+    assert len(selected) == 2
+    assert selected[0] == eth_sponsor
+    assert selected[1] == valid_usdc
+
+    # Attempting to withdraw token without ETH sponsor fails
+    with pytest.raises(ValueError, match="every ERC-20 withdrawal requires an additional mined shielded ETH note"):
+        withdrawal_notes(amount, [valid_usdc], "USDC", chain_id=1)
+
 

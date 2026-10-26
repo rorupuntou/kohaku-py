@@ -162,3 +162,68 @@ def test_edw_cli_shield_unshield_and_network(tmp_path: Path, capsys):
     out = capsys.readouterr().out
     assert "https://bundler.example.org/rpc" in out
 
+
+def test_edw_cli_erc20_shield_and_unshield(tmp_path: Path, capsys):
+    from eth_account import Account
+    from kohaku.edw.cli import (
+        cmd_shield,
+        cmd_unshield,
+        open_or_init_database,
+    )
+    from kohaku.edw.tickets import TicketManager
+
+    data_dir = tmp_path / "edw_erc20_data"
+    chain_id = 1
+    password = "test-master-key"
+    payer = Account.create()
+
+    # 1. Shield 1100 USDC -> splits into 1000 USDC and 100 USDC (2 notes)
+    args_sh = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        amount="1100",
+        token="USDC",
+        label="USDCShield",
+        private_key=payer.key.hex(),
+        nonce=0,
+    )
+    ret = cmd_shield(args_sh)
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "Total Amount:        1100 USDC" in out
+    assert "Decomposed Notes:    2 note(s)" in out
+    assert "ERC-4337 UserOpHash:" in out
+    # 2 notes -> 4 sequential EIP-1559 txs (approve + deposit for each)
+    assert "4 signed raw transaction(s)" in out
+    assert "Nonce #0:" in out
+    assert "Nonce #3:" in out
+
+    # 2. Add a mined ETH sponsor note so ERC-20 unshielding has gas sponsorship
+    db = open_or_init_database(data_dir, chain_id, password=password)
+    tm = TicketManager(db, profile_m=0, profile_x=0)
+    eth_sponsor = tm.create_draft_ticket(currency="ETH", amount="0.1", chain_id=1, label="GasSponsor")
+    tm.mark_mined(eth_sponsor.commitment_hex, leaf_index=0, block_number=26200000)
+
+    # Mark the 2 USDC notes as MINED
+    for idx, t in enumerate(tm.list_tickets()):
+        if t.currency == "USDC":
+            tm.mark_mined(t.commitment_hex, leaf_index=idx + 1, block_number=26200001 + idx)
+
+    # 3. Unshield 100 USDC
+    args_un = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        amount="100",
+        token="USDC",
+        to="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    )
+    ret = cmd_unshield(args_un)
+    assert ret == 0
+    out = capsys.readouterr().out
+    assert "SPONSORED ERC-20 (USDC)" in out
+    assert "[SPONSOR] 0.1 ETH note pays gas through Tornado paymaster" in out
+    assert "[TAIL #1] 100 USDC note" in out
+
+

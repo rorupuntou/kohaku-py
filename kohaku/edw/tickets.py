@@ -21,7 +21,12 @@ from typing import Any, List, Optional
 
 from kohaku.edw.storage.database import EncryptedDatabase
 from kohaku.tornado.note import TornadoNote
-from kohaku.tornado.pools import ALL_POOLS, decompose_eth_amount, get_pool
+from kohaku.tornado.pools import (
+    ALL_POOLS,
+    decompose_eth_amount,
+    deposit_pools_for_asset,
+    get_pool,
+)
 from kohaku.tornado.tx import build_deposit_transactions
 
 
@@ -219,13 +224,14 @@ class TicketManager:
         self,
         amount_wei: int,
         chain_id: int = 1,
+        currency: str = "ETH",
         label: str = "Multi-Shield",
     ) -> List[Ticket]:
-        """Decompose `amount_wei` into native ETH pools and create & save draft tickets."""
-        pools = decompose_eth_amount(amount_wei, chain_id=chain_id)
+        """Decompose `amount_wei` into pools for `currency` and create & save draft tickets."""
+        pools = deposit_pools_for_asset(amount_wei, chain_id=chain_id, asset=currency)
         created: List[Ticket] = []
         for idx, pool in enumerate(pools):
-            note_label = f"{label} ({idx + 1}/{len(pools)}: {pool.amount} ETH)"
+            note_label = f"{label} ({idx + 1}/{len(pools)}: {pool.amount} {pool.asset})"
             ticket = self.create_draft_ticket(
                 currency=pool.asset,
                 amount=pool.amount,

@@ -8,7 +8,7 @@ from kohaku.sync import SagaClient
 from kohaku.tornado import TornadoNote, TornadoPool, TornadoVault
 from kohaku.tornado.relayers import RelayerRegistryVault
 
-__version__ = "0.2.0"
+__version__ = "0.2.2"
 __all__ = [
     "SagaClient",
     "MerkleTree",
