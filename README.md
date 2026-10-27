@@ -48,12 +48,13 @@ kohaku tui
   - Global `--password-file <path>` support across all commands for zero-prompt scripting, headless CI, and automated ops.
 - **Anonymous Invoices (`edw-invoice:v1:...`) & Tor / SOCKS5 Tunneling**:
   - Native RFC 1928 SOCKS5 client in pure Python (`--tor-proxy 127.0.0.1:9050`).
-- **Cross-Client Conformance Suite (`conformance/v1/` & `edw conformance`)**:
+- **Cross-Client Conformance Suite ([`conformance/`](conformance/README.md) & `edw conformance`)**:
   - Multi-language test vectors in JSON ensuring 100% bit-for-bit parity with Rust (`kohaku-rs`, `desktop-wallet`) and Circom across:
     - **Crypto**: MiMC-7 round constants, Poseidon, BabyJubJub Pedersen point compression, and LeanIMT dynamic trees.
     - **Notes & Invoices**: Exact commitment, nullifier hash derivation, and `edw-invoice:v1:...` URIs.
     - **Transactions**: Greedy splitting and ERC-4337 v0.8 `PackedUserOperation` EIP-712 hashes.
     - **Railgun & Storage**: 73-byte `0zk1qy...` Bech32m addresses and Argon2id + blinded HKDF disk paths.
+  - See the complete [Conformance Specification & Guide](conformance/README.md) for how sibling clients consume these vectors.
 - **ZK Cryptography & Protocols**:
   - Pure Python BN254 scalar field arithmetic modulo $p$.
   - 220-round canonical MiMC-7 Sponge matching Tornado Cash on-chain contracts.
