@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kohaku-py"
-version = "0.2.2"
+version = "0.3.0"
 description = "Python privacy SDK & sovereign wallet engine for Ethereum: Tornado Cash, 0xBow Privacy Pools, Railgun 0zk UTXOs, ERC-5564 Stealth Addresses, and Saga Sync"
 readme = "README.md"
 requires-python = ">=3.9"

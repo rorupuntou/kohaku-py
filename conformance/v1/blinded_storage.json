@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Blinded Storage Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for Argon2id key derivation and HKDF-SHA256 blinded record paths.",
+  "argon2id_parameters": {
+    "time_cost": 3,
+    "memory_cost_kib": 65536,
+    "parallelism": 1,
+    "hash_len": 32
+  },
+  "key_derivation_vector": {
+    "password": "correct horse battery staple",
+    "salt_hex": "0102030405060708090a0b0c0d0e0f10",
+    "expected_key_hex": "d8ebeb50632cc1993711eda85db155a107f0fb1cafab88a3a79f3d4661ac7a0c"
+  },
+  "blinded_path_vector": {
+    "root_data_key_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "logical_key": "vault:tornado/note:0",
+    "expected_blinded_filename": "796eedcbff1dbc36baff8dc611c8a347055c98141751b5bd9730069b866d5ed6",
+    "expected_record_encryption_key_hex": "4fa010475ff0002b2195420e94116e9d267f0ea73409b2800e8337a828d426d8"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tornado Cash Notes Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for Tornado Cash ETH and ERC-20 note serializations, commitments, and nullifier hashes.",
+  "fixed_secrets": {
+    "secret_hex": "01010101010101010101010101010101010101010101010101010101010101",
+    "nullifier_hex": "02020202020202020202020202020202020202020202020202020202020202",
+    "expected_commitment_hex": "0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e",
+    "expected_nullifier_hash_hex": "0x2dc724ec2cbd3fc68a0dc1661bc257e608e135fff6ecbd2eeee0081d97cd58a9"
+  },
+  "test_vectors": [
+    {
+      "currency": "ETH",
+      "amount": "0.1",
+      "chain_id": 1,
+      "pool_contract": "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc",
+      "expected_note_string": "tornado-eth-0.1-1-0x0202020202020202020202020202020202020202020202020202020202020201010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "currency": "ETH",
+      "amount": "1",
+      "chain_id": 1,
+      "pool_contract": "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936",
+      "expected_note_string": "tornado-eth-1-1-0x0202020202020202020202020202020202020202020202020202020202020201010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "currency": "DAI",
+      "amount": "100",
+      "chain_id": 1,
+      "pool_contract": "0xd4b88df4d29f5cedd6857912842cff3b20c8cfa3",
+      "expected_note_string": "tornado-dai-100-1-0x0202020202020202020202020202020202020202020202020202020202020201010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "currency": "USDC",
+      "amount": "100",
+      "chain_id": 1,
+      "pool_contract": "0xd96f2b1c14db8458374d9aca76e28c3dce02f10d",
+      "expected_note_string": "tornado-usdc-100-1-0x0202020202020202020202020202020202020202020202020202020202020201010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "currency": "WBTC",
+      "amount": "0.1",
+      "chain_id": 1,
+      "pool_contract": "0x178169b423a7295266e1fe01c19e9273291c3057",
+      "expected_note_string": "tornado-wbtc-0.1-1-0x0202020202020202020202020202020202020202020202020202020202020201010101010101010101010101010101010101010101010101010101010101"
+    }
+  ]
+}

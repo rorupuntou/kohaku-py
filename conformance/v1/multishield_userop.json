@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Multi-Shield Greedy & UserOperation v0.8 Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for greedy token decomposition and ERC-4337 v0.8 / EIP-712 PackedUserOperation hashing.",
+  "greedy_decomposition": [
+    {
+      "currency": "ETH",
+      "amount": "33.34",
+      "chain_id": 1,
+      "expected_denominations": ["30", "3", "0.3", "0.03", "0.01"]
+    },
+    {
+      "currency": "USDC",
+      "amount": "1100",
+      "chain_id": 1,
+      "expected_denominations": ["1000", "100"]
+    },
+    {
+      "currency": "DAI",
+      "amount": "11100",
+      "chain_id": 1,
+      "expected_denominations": ["10000", "1000", "100"]
+    },
+    {
+      "currency": "WBTC",
+      "amount": "11.1",
+      "chain_id": 1,
+      "expected_denominations": ["10", "1", "0.1"]
+    }
+  ],
+  "packed_user_operation_v08": {
+    "sender": "0x000000000000000000000000000000000000dEaD",
+    "nonce": 42,
+    "init_code_hex": "0x000000000000000000000000000000000000beef666163746f72792064617461",
+    "call_data_hex": "0x63616c6c2064617461",
+    "verification_gas_limit": 50000,
+    "call_gas_limit": 100000,
+    "pre_verification_gas": 10000,
+    "max_priority_fee_per_gas": 50,
+    "max_fee_per_gas": 200,
+    "paymaster_and_data_hex": "0x000000000000000000000000000000000000feed00000000000000000000000000004e20000000000000000000000000000075307061796d61737465722064617461",
+    "chain_id": 1,
+    "entry_point": "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108",
+    "expected_user_op_hash_hex": "0xa763cdf6c11eee14cea4d32863d184afe29859b556c85b7ae6f11f64f8945492"
+  }
+}

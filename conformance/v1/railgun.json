@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Railgun 0zk Bech32m Address Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for Railgun 73-byte 0zk1qy... Bech32m address encoding and decoding.",
+  "master_public_key_hex": "0x1afd01a29faf22dcc5678694092a08d38de99fc97d07b9281fa66f956ce43579",
+  "viewing_public_key_hex": "0x26b8d803977abd16547e6b015decd1b068f2ae8c44f25e10e8d5627faff65eb2",
+  "test_vectors": [
+    {
+      "description": "Ethereum L1 Railgun Address (chain_type=0, chain_id=1)",
+      "chain_type": 0,
+      "chain_id": 1,
+      "version": 1,
+      "expected_0zk": "0zk1qyd06qdzn7hj9hx9v7rfgzf2prfcm6vle97s0wfgr7nxl9tvus6hnllllllllllllcnt3kqrjaat69j50e4szh0v6xcx3u4w33z0yhssar2kyla07e0tys7vl6g"
+    },
+    {
+      "description": "All-Chains Railgun Address (chain_type=None, chain_id=None)",
+      "chain_type": null,
+      "chain_id": null,
+      "version": 1,
+      "expected_0zk": "0zk1qyd06qdzn7hj9hx9v7rfgzf2prfcm6vle97s0wfgr7nxl9tvus6hjqqqqqqqqqqqqqnt3kqrjaat69j50e4szh0v6xcx3u4w33z0yhssar2kyla07e0tyhnrvk6"
+    }
+  ]
+}

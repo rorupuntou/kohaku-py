@@ -526,6 +526,35 @@ def cmd_network(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_conformance(args: argparse.Namespace) -> int:
+    from kohaku.conformance.verifier import verify_all
+    vdir = Path(args.dir) if getattr(args, "dir", None) else None
+    results = verify_all(vdir)
+    all_ok = True
+    total_cases = 0
+
+    print("=" * 65)
+    print("  🦊⚡ KOHAKU CONFORMANCE SUITE (Cross-Client Spec Verification)")
+    print("=" * 65)
+    for suite_name, res in results.items():
+        total_cases += res.cases_run
+        status = "PASSED" if res.passed else "FAILED"
+        bullet = "✓" if res.passed else "✗"
+        print(f" {bullet} {suite_name:<28} [{res.cases_run} vectors] -> {status}")
+        if not res.passed:
+            all_ok = False
+            for err in res.errors:
+                print(f"     ! {err}")
+
+    print("-" * 65)
+    if all_ok:
+        print(f"🎉 100% SPEC PARITY: All {total_cases} canonical vectors verified successfully.")
+        return 0
+    else:
+        print("❌ CONFORMANCE FAILURES DETECTED.")
+        return 1
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     from kohaku.tui.app import run_tui
     run_tui(mnemonic=args.mnemonic, chain_id=args.chain_id)
@@ -666,6 +695,11 @@ def main() -> None:
     tui_p = subparsers.add_parser("tui", help="Launch interactive Terminal Desktop Wallet UI")
     tui_p.add_argument("--mnemonic", help="Optional BIP-39 mnemonic to pre-load")
     tui_p.set_defaults(func=cmd_tui)
+
+    # conformance
+    conf_p = subparsers.add_parser("conformance", help="Verify cross-client canonical test vectors")
+    conf_p.add_argument("--dir", help="Optional path to custom conformance vectors directory")
+    conf_p.set_defaults(func=cmd_conformance)
 
     args = parser.parse_args()
     try:

@@ -48,6 +48,12 @@ kohaku tui
   - Global `--password-file <path>` support across all commands for zero-prompt scripting, headless CI, and automated ops.
 - **Anonymous Invoices (`edw-invoice:v1:...`) & Tor / SOCKS5 Tunneling**:
   - Native RFC 1928 SOCKS5 client in pure Python (`--tor-proxy 127.0.0.1:9050`).
+- **Cross-Client Conformance Suite (`conformance/v1/` & `edw conformance`)**:
+  - Multi-language test vectors in JSON ensuring 100% bit-for-bit parity with Rust (`kohaku-rs`, `desktop-wallet`) and Circom across:
+    - **Crypto**: MiMC-7 round constants, Poseidon, BabyJubJub Pedersen point compression, and LeanIMT dynamic trees.
+    - **Notes & Invoices**: Exact commitment, nullifier hash derivation, and `edw-invoice:v1:...` URIs.
+    - **Transactions**: Greedy splitting and ERC-4337 v0.8 `PackedUserOperation` EIP-712 hashes.
+    - **Railgun & Storage**: 73-byte `0zk1qy...` Bech32m addresses and Argon2id + blinded HKDF disk paths.
 - **ZK Cryptography & Protocols**:
   - Pure Python BN254 scalar field arithmetic modulo $p$.
   - 220-round canonical MiMC-7 Sponge matching Tornado Cash on-chain contracts.
@@ -98,10 +104,10 @@ edw railgun audit --local-dir /path/to/saga-snapshots
 edw network view
 edw network bundler-add https://bundler.example.org/rpc
 
-# 6. Create an anonymous payment request (Invoice)
-edw invoice new --amount 0.03 --label "Consulting"
+# 7. Verify cross-client canonical test vectors (100% spec parity)
+edw conformance
 
-# 7. Launch the interactive terminal UI
+# 8. Launch the interactive terminal UI
 edw tui
 ```
 
@@ -226,7 +232,14 @@ pytest -v
 ```
 
 ```
-tests/test_crypto.py::test_mimc_constants PASSED                         [  2%]
+tests/test_conformance.py::test_conformance_crypto_primitives PASSED     [  1%]
+tests/test_conformance.py::test_conformance_tornado_notes PASSED         [  3%]
+tests/test_conformance.py::test_conformance_invoices PASSED              [  5%]
+tests/test_conformance.py::test_conformance_multishield_userop PASSED    [  7%]
+tests/test_conformance.py::test_conformance_railgun PASSED               [  9%]
+tests/test_conformance.py::test_conformance_blinded_storage PASSED       [ 11%]
+tests/test_conformance.py::test_conformance_verify_all PASSED            [ 13%]
+tests/test_crypto.py::test_mimc_constants PASSED                         [ 15%]
 tests/test_crypto.py::test_tornado_zero_value_propagation PASSED         [  4%]
 tests/test_crypto.py::test_poseidon PASSED                               [  6%]
 tests/test_crypto.py::test_pedersen_hash_kohaku_rs_parity PASSED         [  9%]
@@ -271,7 +284,7 @@ tests/test_tornado.py::test_erc20_token_catalog_selection_units_and_denomination
 tests/test_tornado.py::test_erc20_withdrawals_do_not_mix_assets_and_require_eth_sponsor PASSED [ 97%]
 tests/test_tui.py::test_tui_app_mount_and_headless PASSED                [100%]
 
-============================== 44 passed in 5.70s ==============================
+============================== 51 passed in 7.14s ==============================
 ```
 
 ---

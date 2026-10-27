@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Crypto Primitives Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for MiMC-7, Poseidon, BabyJubJub Pedersen Hash, and LeanIMT.",
+  "mimc7": {
+    "constants_count": 220,
+    "tornado_zero_value_hex": "0x2fe54c60d3acabf3343a35b6eba15db4821b340f76e741e2249685ed4899af6c",
+    "level_1_zero_hex": "0x0b25451a6cf5313a0542635773968e6a807acc614069a815b0dc8157145b4724",
+    "test_vectors": [
+      {
+        "description": "Hash of level 0 zero value with itself",
+        "inputs_hex": [
+          "0x2fe54c60d3acabf3343a35b6eba15db4821b340f76e741e2249685ed4899af6c",
+          "0x2fe54c60d3acabf3343a35b6eba15db4821b340f76e741e2249685ed4899af6c"
+        ],
+        "expected_hash_hex": "0x0b25451a6cf5313a0542635773968e6a807acc614069a815b0dc8157145b4724"
+      }
+    ]
+  },
+  "poseidon": {
+    "test_vectors": [
+      {
+        "description": "Poseidon-2 with inputs [1, 2]",
+        "inputs": [1, 2],
+        "expected_hash_hex": "0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a"
+      },
+      {
+        "description": "Poseidon-3 with inputs [1, 2, 3]",
+        "inputs": [1, 2, 3],
+        "expected_hash_hex": "0x0e7732d89e6939c0ff03d5e58dab6302f3230e269dc5b968f725df34ab36d732"
+      }
+    ]
+  },
+  "pedersen_babyjubjub": {
+    "generator_0_compressed_point_hex": "1d1a2f1759e26271d2d3b44e56c1e89de65252d1d2df8af8a9bcfb97d807d42b",
+    "test_vectors": [
+      {
+        "description": "Pedersen hash of ascii 'Hello, world!'",
+        "preimage_ascii": "Hello, world!",
+        "expected_hash_hex": "0x1dd3f99b50afac511a14a2fd4974c0a99832c1d0bbac0e1983fa35c218c4f9e2"
+      }
+    ]
+  },
+  "leanimt": {
+    "test_vectors": [
+      {
+        "description": "Incremental tree with Poseidon-2 hash function",
+        "leaves": [101, 202, 303],
+        "intermediate_roots_hex": [
+          "0x65",
+          "0x2ab1afc864da320241480464ba7e4a733d5030d0bc47128761aa425bca473472",
+          "0x13110b66b5ed0fbcbeff9a9a1777c80c8f59f20e2b964f29bdaa3b86e0b96048"
+        ],
+        "leaf_0_inclusion_proof_valid": true
+      }
+    ]
+  }
+}

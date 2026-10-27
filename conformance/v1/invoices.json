@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Anonymous Invoices Conformance Suite (v1)",
+  "description": "Cross-client canonical test vectors for edw-invoice:v1:... serialization and parsing.",
+  "test_vectors": [
+    {
+      "description": "0.1 ETH Invoice on Mainnet",
+      "chain_id": 1,
+      "currency": "ETH",
+      "amount": "0.1",
+      "pool_contract": "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc",
+      "commitment": "0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e",
+      "expected_uri": "edw-invoice:v1:1:ETH:0.1:0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc:0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e"
+    },
+    {
+      "description": "100 DAI Invoice on Mainnet",
+      "chain_id": 1,
+      "currency": "DAI",
+      "amount": "100",
+      "pool_contract": "0xd4b88df4d29f5cedd6857912842cff3b20c8cfa3",
+      "commitment": "0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e",
+      "expected_uri": "edw-invoice:v1:1:DAI:100:0xd4b88df4d29f5cedd6857912842cff3b20c8cfa3:0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e"
+    },
+    {
+      "description": "100 USDC Invoice on Mainnet",
+      "chain_id": 1,
+      "currency": "USDC",
+      "amount": "100",
+      "pool_contract": "0xd96f2b1c14db8458374d9aca76e28c3dce02f10d",
+      "commitment": "0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e",
+      "expected_uri": "edw-invoice:v1:1:USDC:100:0xd96f2b1c14db8458374d9aca76e28c3dce02f10d:0x1b238bbdfb44c96d0fe6a97963c3c3f2db5ca5c60e1bf76c8b62da4ba880a73e"
+    }
+  ]
+}
