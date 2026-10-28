@@ -104,3 +104,67 @@ def test_tui_interactive_wallet_lifecycle():
             assert "One-Time Stealth Address" in str(stealth_box.content)
 
     asyncio.run(_run())
+
+
+def test_broadcast_modal_direct_and_relayer_presets():
+    from kohaku.tui.modals import BroadcastModal, RPC_PRESETS, RELAYER_PRESETS
+    from textual.app import App
+    from textual.widgets import Select, Input
+
+    class DummyApp(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(
+                BroadcastModal(
+                    contract_address="0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc",
+                    calldata="0x21a0adb6" + "00" * 256,
+                    pool_id="tornado-cash-1-eth-0.1",
+                    is_relayer=True,
+                    recipient="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+                    relayer_address="0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753",
+                    fee=5_000_000_000_000_000,
+                    refund=0,
+                    root=12345,
+                    nullifier_hash=67890,
+                    proof_hex="0x" + "00" * 256,
+                )
+            )
+
+    async def _run():
+        app = DummyApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, BroadcastModal)
+
+            # Check relayer container is visible and direct is hidden
+            assert modal.query_one("#container-relayer").display is True
+            assert modal.query_one("#container-direct").display is False
+
+            # Select different relayer preset
+            relayer_select = modal.query_one("#select-relayer-preset", Select)
+            relayer_select.value = RELAYER_PRESETS[1][1]
+            await pilot.pause()
+            relayer_input = modal.query_one("#input-relayer-url", Input)
+            assert relayer_input.value == RELAYER_PRESETS[1][1]
+
+            # Switch mode to direct L1
+            mode_select = modal.query_one("#select-delivery-mode", Select)
+            mode_select.value = "direct"
+            await pilot.pause()
+            assert modal.query_one("#container-relayer").display is False
+            assert modal.query_one("#container-direct").display is True
+
+            # Select different RPC preset
+            rpc_select = modal.query_one("#select-rpc-preset", Select)
+            rpc_select.value = RPC_PRESETS[1][1]
+            await pilot.pause()
+            rpc_input = modal.query_one("#input-rpc-url", Input)
+            assert rpc_input.value == RPC_PRESETS[1][1]
+
+            # Test dismiss via cancel button
+            modal.query_one("#btn-cancel-broadcast").press()
+            await pilot.pause()
+            assert not any(isinstance(s, BroadcastModal) for s in app.screen_stack)
+
+    asyncio.run(_run())
+

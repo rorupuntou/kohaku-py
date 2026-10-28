@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from eth_account import Account
+from eth_utils import to_checksum_address
 from textual.app import ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static
+from textual.widgets import Button, Input, Label, Select, Static
 
 Account.enable_unaudited_hdwallet_features()
 
 DEV_TEST_SEED = "test test test test test test test test test test test junk"
+
+RPC_PRESETS: list[tuple[str, str]] = [
+    ("PublicNode (Mainnet - Fast & Public)", "https://ethereum-rpc.publicnode.com"),
+    ("1RPC / Automata (Mainnet - Anti-MEV / Privacy)", "https://1rpc.io/eth"),
+    ("MEV Blocker (Mainnet - CoW DAO / Beaver)", "https://rpc.mevblocker.io"),
+    ("Sepolia Testnet (PublicNode)", "https://ethereum-sepolia-rpc.publicnode.com"),
+    ("Local Node (http://127.0.0.1:8545)", "http://127.0.0.1:8545"),
+    ("Custom RPC Endpoint...", "custom"),
+]
+
+RELAYER_PRESETS: list[tuple[str, str]] = [
+    ("00Relayer (eth.00relayer.xyz - Verified Mainnet)", "https://eth.00relayer.xyz/v1/tornadoWithdraw"),
+    ("Tornado Community Relayer (tornadocash.eth.limo)", "https://relayer.tornadocash.eth.limo/v1/tornadoWithdraw"),
+    ("Local Relayer Daemon (http://127.0.0.1:8000)", "http://127.0.0.1:8000/v1/tornadoWithdraw"),
+    ("Custom Relayer Endpoint...", "custom"),
+]
 
 
 class SeedModal(ModalScreen[str]):
@@ -160,7 +180,7 @@ class BroadcastModal(ModalScreen[None]):
         background: rgba(0, 0, 0, 0.7);
     }
     #broadcast-dialog {
-        width: 85;
+        width: 88;
         height: auto;
         border: solid $warning;
         background: $surface;
@@ -189,6 +209,7 @@ class BroadcastModal(ModalScreen[None]):
         margin-top: 1;
         margin-bottom: 1;
         height: auto;
+        min-height: 3;
     }
     #broadcast-btn-bar {
         align: right middle;
@@ -197,67 +218,224 @@ class BroadcastModal(ModalScreen[None]):
     #broadcast-btn-bar Button {
         margin-left: 1;
     }
+    .action-row {
+        height: auto;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
     """
 
-    def __init__(self, contract_address: str, calldata: str, pool_id: str, is_relayer: bool = False):
+    def __init__(
+        self,
+        contract_address: str,
+        calldata: str,
+        pool_id: str,
+        is_relayer: bool = False,
+        recipient: str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        relayer_address: str = "0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753",
+        fee: int = 0,
+        refund: int = 0,
+        root: int | str = 0,
+        nullifier_hash: int | str = 0,
+        proof_hex: str = "",
+    ):
         super().__init__()
         self.contract_address = contract_address
         self.calldata = calldata
         self.pool_id = pool_id
         self.is_relayer = is_relayer
+        self.recipient = recipient
+        self.relayer_address = relayer_address
+        self.fee = fee
+        self.refund = refund
+        self.root = root
+        self.nullifier_hash = nullifier_hash
+        self.proof_hex = proof_hex
 
     def compose(self) -> ComposeResult:
         with Vertical(id="broadcast-dialog"):
             yield Label("🚀 On-Chain Broadcast & Relayer Dispatch", id="broadcast-title")
             yield Static(
-                "⚠️ OPSEC CAUTION: Broadcasting will submit this transaction to the public network. "
-                "Ensure your IP is protected (Tor / VPN) and the recipient is unlinked.",
+                "⚠️ OPSEC CAUTION: Submitting will send this transaction to the network. "
+                "Ensure your IP is protected (Tor / VPN) and the recipient address is unlinked.",
                 classes="broadcast-warning",
             )
 
-            if self.is_relayer:
-                yield Label("Relayer Endpoint URL:", classes="modal-label")
-                yield Input(value="https://mainnet-tornado-relayer.example.org/v1/tornadoWithdraw", id="input-relayer-url")
-            else:
+            yield Label("Delivery Mode:", classes="modal-label")
+            yield Select(
+                [
+                    ("Direct L1 Transaction (User Pays Gas)", "direct"),
+                    ("Tornado Relayer (Gasless Paymaster Delivery)", "relayer"),
+                ],
+                id="select-delivery-mode",
+                value="relayer" if self.is_relayer else "direct",
+                allow_blank=False,
+            )
+
+            with Vertical(id="container-relayer"):
+                yield Label("Select Verified Tornado Relayer Preset:", classes="modal-label")
+                yield Select(RELAYER_PRESETS, id="select-relayer-preset", value=RELAYER_PRESETS[0][1], allow_blank=False)
+                yield Label("Relayer Endpoint URL (auto-appends /v1/tornadoWithdraw):", classes="modal-label")
+                yield Input(value=RELAYER_PRESETS[0][1], id="input-relayer-url")
+                with Horizontal(classes="action-row"):
+                    yield Button("🔍 Ping Relayer Status (/v1/status)", variant="default", id="btn-ping-relayer")
+
+            with Vertical(id="container-direct"):
+                yield Label("Select Verified Ethereum L1 RPC Preset:", classes="modal-label")
+                yield Select(RPC_PRESETS, id="select-rpc-preset", value=RPC_PRESETS[0][1], allow_blank=False)
                 yield Label("Target Ethereum RPC Endpoint:", classes="modal-label")
-                yield Input(value="https://ethereum-rpc.publicnode.com", placeholder="https://ethereum-rpc.publicnode.com or http://127.0.0.1:8545", id="input-rpc-url")
+                yield Input(value=RPC_PRESETS[0][1], id="input-rpc-url")
+                with Horizontal(classes="action-row"):
+                    yield Button("🔍 Test RPC Connection (eth_blockNumber)", variant="default", id="btn-test-rpc")
                 yield Label("Sender Private Key (Optional - for local signing & eth_sendRawTransaction):", classes="modal-label")
                 yield Input(placeholder="0x... (leave empty if node has unlocked account)", password=True, id="input-private-key")
 
-            yield Static("Ready to broadcast...", id="broadcast-status")
+            yield Static("Ready to broadcast or dispatch...", id="broadcast-status")
 
             with Horizontal(id="broadcast-btn-bar"):
                 yield Button("Cancel", variant="default", id="btn-cancel-broadcast")
                 yield Button("Confirm & Broadcast 🚀", variant="warning", id="btn-confirm-broadcast")
 
+    def on_mount(self) -> None:
+        self.query_one("#container-relayer").display = self.is_relayer
+        self.query_one("#container-direct").display = not self.is_relayer
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "select-delivery-mode":
+            is_rel = str(event.value) == "relayer"
+            self.query_one("#container-relayer").display = is_rel
+            self.query_one("#container-direct").display = not is_rel
+        elif event.select.id == "select-rpc-preset":
+            val = str(event.value)
+            if val != "custom" and event.value != Select.BLANK:
+                self.query_one("#input-rpc-url", Input).value = val
+        elif event.select.id == "select-relayer-preset":
+            val = str(event.value)
+            if val != "custom" and event.value != Select.BLANK:
+                self.query_one("#input-relayer-url", Input).value = val
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        status_box = self.query_one("#broadcast-status", Static)
+
         if event.button.id == "btn-cancel-broadcast":
             self.dismiss(None)
+
+        elif event.button.id == "btn-test-rpc":
+            rpc_url = self.query_one("#input-rpc-url", Input).value.strip()
+            status_box.update(f"⏳ Connecting to {rpc_url}...")
+            try:
+                data = json.dumps({"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}).encode("utf-8")
+                req = urllib.request.Request(
+                    rpc_url,
+                    data=data,
+                    headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                )
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    res = json.loads(resp.read().decode("utf-8"))
+                    block_hex = res.get("result", "0x0")
+                    block_num = int(block_hex, 16)
+                    status_box.update(f"✓ RPC CONNECTED!\nLatest Block: #{block_num:,} ({block_hex})\nEndpoint: {rpc_url}")
+            except Exception as e:
+                status_box.update(f"❌ RPC connection error: {e}")
+
+        elif event.button.id == "btn-ping-relayer":
+            url = self.query_one("#input-relayer-url", Input).value.strip()
+            status_box.update("⏳ Pinging relayer status...")
+            try:
+                parsed = urllib.parse.urlparse(url)
+                base_url = f"{parsed.scheme}://{parsed.netloc}"
+                status_url = f"{base_url}/v1/status"
+                req = urllib.request.Request(status_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    st_data = json.loads(resp.read().decode("utf-8"))
+                    reward_acc = st_data.get("rewardAccount", "N/A")
+                    fee = st_data.get("tornadoServiceFee", "N/A")
+                    version = st_data.get("version", "N/A")
+                    health = st_data.get("health", {})
+                    status_box.update(
+                        f"✓ RELAYER ONLINE (HTTP 200)\n"
+                        f"Endpoint:      {base_url}\n"
+                        f"RewardAccount: {reward_acc}\n"
+                        f"Service Fee:   {fee}%\n"
+                        f"Version:       {version}\n"
+                        f"Health:        {health}"
+                    )
+            except Exception as e:
+                status_box.update(f"❌ Relayer unreachable: {e}")
+
         elif event.button.id == "btn-confirm-broadcast":
-            status_box = self.query_one("#broadcast-status", Static)
+            delivery_mode = str(self.query_one("#select-delivery-mode", Select).value)
             status_box.update("⏳ Submitting to network...")
-            if self.is_relayer:
-                url = self.query_one("#input-relayer-url", Input).value.strip()
+
+            if delivery_mode == "relayer":
+                raw_url = self.query_one("#input-relayer-url", Input).value.strip()
+                if not raw_url:
+                    status_box.update("❌ Please provide a relayer endpoint URL.")
+                    return
+
+                # Normalize relayer endpoint (auto-append /v1/tornadoWithdraw if omitted)
+                parsed = urllib.parse.urlparse(raw_url)
+                if not parsed.path or parsed.path == "/":
+                    url = raw_url.rstrip("/") + "/v1/tornadoWithdraw"
+                else:
+                    url = raw_url
+
                 try:
-                    from kohaku.edw.p2p import post_json_rpc
-                    payload = {"contract": self.contract_address, "data": self.calldata}
-                    res = post_json_rpc(url, payload)
-                    status_box.update(f"✓ RELAYER ACCEPTED:\n{json.dumps(res, indent=2)}")
+                    c_addr = to_checksum_address(self.contract_address)
+                    recip_addr = to_checksum_address(self.recipient)
+                    rel_addr = to_checksum_address(self.relayer_address)
+
+                    root_int = int(self.root, 16) if isinstance(self.root, str) else int(self.root)
+                    null_int = int(self.nullifier_hash, 16) if isinstance(self.nullifier_hash, str) else int(self.nullifier_hash)
+
+                    p_hex = self.proof_hex
+                    if not p_hex.startswith("0x"):
+                        p_hex = "0x" + p_hex
+                    if len(p_hex) < 514:
+                        p_hex = "0x" + p_hex[2:].zfill(512)
+
+                    payload = {
+                        "contract": c_addr,
+                        "proof": p_hex,
+                        "args": [
+                            f"0x{root_int:064x}",
+                            f"0x{null_int:064x}",
+                            recip_addr,
+                            rel_addr,
+                            f"0x{int(self.fee):064x}",
+                            f"0x{int(self.refund):064x}",
+                        ],
+                    }
+
+                    data_bytes = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(
+                        url,
+                        data=data_bytes,
+                        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        res = json.loads(resp.read().decode("utf-8"))
+                        status_box.update(f"✓ RELAYER DISPATCH ACCEPTED:\n{json.dumps(res, indent=2)}")
+                except urllib.error.HTTPError as he:
+                    err_body = he.read().decode("utf-8", errors="replace")
+                    status_box.update(f"❌ Relayer response (HTTP {he.code}):\n{err_body}")
                 except Exception as e:
                     status_box.update(f"❌ Relayer dispatch failed: {e}")
+
             else:
                 rpc_url = self.query_one("#input-rpc-url", Input).value.strip()
                 pk = self.query_one("#input-private-key", Input).value.strip()
                 try:
                     from kohaku.edw.p2p import P2PBroadcaster
                     broadcaster = P2PBroadcaster(peers=[rpc_url])
+                    target_addr = to_checksum_address(self.contract_address)
                     if pk:
-                        from eth_account import Account
                         acc = Account.from_key(pk)
-                        nonce = broadcaster.rpc_call("eth_getTransactionCount", [acc.address, "pending"])
+                        acc_addr = to_checksum_address(acc.address)
+                        nonce = broadcaster.rpc_call("eth_getTransactionCount", [acc_addr, "pending"])
                         gas_price = broadcaster.rpc_call("eth_gasPrice")
                         tx_dict = {
-                            "to": self.contract_address,
+                            "to": target_addr,
                             "data": bytes.fromhex(self.calldata[2:] if self.calldata.startswith("0x") else self.calldata),
                             "value": 0,
                             "gas": 450000,
@@ -269,9 +447,10 @@ class BroadcastModal(ModalScreen[None]):
                         res = broadcaster.broadcast_raw_tx(signed.raw_transaction.hex())
                         status_box.update(f"✓ BROADCAST SUCCESSFUL!\nTx Hash: {res.tx_hash}\nPeer: {res.peer}")
                     else:
-                        tx_obj = {"to": self.contract_address, "data": self.calldata, "value": "0x0"}
+                        tx_obj = {"to": target_addr, "data": self.calldata, "value": "0x0"}
                         res = broadcaster.rpc_call("eth_sendTransaction", [tx_obj])
                         status_box.update(f"✓ TRANSACTION BROADCAST!\nTx Hash: {res}\nRPC: {rpc_url}")
                 except Exception as e:
                     status_box.update(f"❌ Broadcast failed: {e}")
+
 

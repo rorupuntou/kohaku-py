@@ -598,6 +598,9 @@ class KohakuApp(App[None]):
                 "delivery_mode": mode_label,
                 "relayer": relayer,
                 "fee": fee_val,
+                "refund": 0,
+                "root": 12345,
+                "nullifier_hash": 67890,
                 "groth16_proof_hex": proof.to_hex(),
                 "selector": f"0x{WITHDRAW_SELECTOR.hex()}",
                 "calldata": tx.data,
@@ -662,6 +665,13 @@ class KohakuApp(App[None]):
                         calldata=self.last_withdrawal["calldata"],
                         pool_id=self.last_withdrawal["pool_id"],
                         is_relayer=is_relayer,
+                        recipient=self.last_withdrawal.get("recipient", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+                        relayer_address=self.last_withdrawal.get("relayer", "0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753"),
+                        fee=self.last_withdrawal.get("fee", 0),
+                        refund=self.last_withdrawal.get("refund", 0),
+                        root=self.last_withdrawal.get("root", 12345),
+                        nullifier_hash=self.last_withdrawal.get("nullifier_hash", 67890),
+                        proof_hex=self.last_withdrawal.get("groth16_proof_hex", ""),
                     )
                 )
             else:
