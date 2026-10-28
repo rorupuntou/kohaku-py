@@ -32,7 +32,7 @@ from kohaku.tornado.tx import build_deposit_transactions
 from kohaku.tornado.withdraw import WITHDRAW_SELECTOR, build_withdraw_transaction
 from kohaku.tornado.zk.codec import Groth16Proof
 from kohaku.tornado.zk.verifier import verify_groth16_proof
-from kohaku.tui.modals import BroadcastModal, NoteModal, SeedModal
+from kohaku.tui.modals import AccountModal, BroadcastModal, NoteModal, SeedModal, fetch_eth_balance
 
 Account.enable_unaudited_hdwallet_features()
 
@@ -144,6 +144,24 @@ class KohakuApp(App[None]):
         height: 14;
         overflow-y: auto;
     }
+
+    #wallet-info-bar {
+        height: 3;
+        margin-bottom: 1;
+        padding: 0 1;
+        background: $surface-darken-1;
+        border: solid $accent;
+        align: left middle;
+    }
+    .wallet-bar-label {
+        text-style: bold;
+        color: $accent;
+        margin-right: 1;
+    }
+    #wallet-mnemonic-label {
+        color: $text;
+        width: 1fr;
+    }
     """
 
     BINDINGS = [
@@ -187,6 +205,11 @@ class KohakuApp(App[None]):
         yield Header(show_clock=True)
         with TabbedContent(id="main-tabs"):
             with TabPane("📊 Dashboard", id="tab-dashboard"):
+                with Horizontal(id="wallet-info-bar"):
+                    yield Label("🔑 Active Wallet:", classes="wallet-bar-label")
+                    yield Static("Loading wallet...", id="wallet-mnemonic-label")
+                    yield Button("🔑 Switch / Import Seed", variant="default", id="btn-switch-seed")
+
                 with Horizontal(id="stats-row"):
                     yield StatCard("PUBLIC ACCOUNTS", "0 accounts", id="stat-public")
                     yield StatCard("SHIELDED BALANCE", "0.0000 ETH", id="stat-shielded")
@@ -197,6 +220,10 @@ class KohakuApp(App[None]):
                     with Vertical(classes="panel-box"):
                         yield Label("PUBLIC ACCOUNTS (BIP-44 m/44'/60'/0'/0/i)", classes="panel-header")
                         yield DataTable(id="table-accounts")
+                        with Horizontal(classes="action-bar"):
+                            yield Button("🔑 View Key & Details", variant="primary", id="btn-view-acc-key")
+                            yield Button("🔄 Check Balances", variant="default", id="btn-check-balances")
+                            yield Button("💸 Set as Recipient", variant="success", id="btn-set-acc-recipient")
 
                     with Vertical(classes="panel-box"):
                         yield Label("SHIELDED & PRIVATE NOTES", classes="panel-header")
@@ -238,7 +265,7 @@ class KohakuApp(App[None]):
                     yield Select(
                         [
                             ("Direct L1 Transaction (User Pays Gas)", "0x0000000000000000000000000000000000000000"),
-                            ("Tornado Relayer (Gasless Delivery via Paymaster)", "0x58e8dcc13be9780fc42e8723d8ead4cf46943df2"),
+                            ("Tornado Relayer (Gasless Delivery via Paymaster)", "0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753"),
                         ],
                         id="select-withdraw-relayer",
                         value="0x0000000000000000000000000000000000000000",
@@ -305,7 +332,7 @@ class KohakuApp(App[None]):
     def init_tables(self) -> None:
         # Accounts table
         acc_table = self.query_one("#table-accounts", DataTable)
-        acc_table.add_columns("IDX", "DERIVATION PATH", "ADDRESS")
+        acc_table.add_columns("IDX", "DERIVATION PATH", "ADDRESS", "BALANCE (ETH)")
         acc_table.cursor_type = "row"
 
         # Notes table
@@ -334,28 +361,43 @@ class KohakuApp(App[None]):
             pass
 
     def load_wallet(self, mnemonic: str) -> None:
-        self.mnemonic = mnemonic
-        # 1. Derive 5 public accounts
+        self.mnemonic = mnemonic.strip()
+        # 1. Derive 5 public accounts with private keys
         self.public_accounts.clear()
         acc_table = self.query_one("#table-accounts", DataTable)
         acc_table.clear()
 
         for idx in range(5):
             path = f"m/44'/60'/0'/0/{idx}"
-            acc = Account.from_mnemonic(mnemonic, account_path=path)
-            self.public_accounts.append({"index": str(idx), "path": path, "address": acc.address})
-            acc_table.add_row(f"#{idx}", path, acc.address)
+            acc = Account.from_mnemonic(self.mnemonic, account_path=path)
+            self.public_accounts.append({
+                "index": str(idx),
+                "path": path,
+                "address": acc.address,
+                "private_key": acc.key.hex(),
+                "balance": "0.0000 ETH (unqueried)",
+            })
+            acc_table.add_row(f"#{idx}", path, acc.address, "0.0000 ETH (unqueried)")
 
         # 2. Derive Stealth Keypair
-        self.stealth_pair = derive_stealth_keypair(mnemonic, chain_id=self.chain_id)
+        self.stealth_pair = derive_stealth_keypair(self.mnemonic, chain_id=self.chain_id)
         meta_label = self.query_one("#lbl-meta-uri", Label)
         meta_label.update(self.stealth_pair.stealth_meta_address_uri)
 
         # 3. Derive Tornado Keychain
-        self.keychain = TornadoKeychain.from_mnemonic(mnemonic)
+        self.keychain = TornadoKeychain.from_mnemonic(self.mnemonic)
 
-        # Update stats
+        # Update stats and info bar
         self.query_one("#stat-public", StatCard).update_value(f"{len(self.public_accounts)} Derived")
+        words = self.mnemonic.split()
+        masked_phrase = f"{words[0]} {words[1]} ... {words[-1]} ({len(words)} words)"
+        try:
+            self.query_one("#wallet-mnemonic-label", Static).update(
+                f"Active Seed: {masked_phrase} | Account #0: {self.public_accounts[0]['address']}"
+            )
+            self.query_one("#input-withdraw-recipient", Input).value = self.public_accounts[0]["address"]
+        except Exception:
+            pass
 
         # 4. Generate initial deterministic notes for display
         self.derived_notes.clear()
@@ -401,8 +443,14 @@ class KohakuApp(App[None]):
             row_idx = event.cursor_row
             if 0 <= row_idx < len(self.public_accounts):
                 acc = self.public_accounts[row_idx]
-                self.query_one("#input-withdraw-recipient", Input).value = acc["address"]
-                self.notify(f"Selected Account #{row_idx} ({acc['address'][:10]}...) as withdrawal recipient!")
+                self.push_screen(
+                    AccountModal(
+                        index=int(acc["index"]),
+                        path=acc["path"],
+                        address=acc["address"],
+                        private_key=acc["private_key"],
+                    )
+                )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-build-deposit":
@@ -493,6 +541,54 @@ class KohakuApp(App[None]):
             if self.public_accounts:
                 self.query_one("#input-withdraw-recipient", Input).value = self.public_accounts[0]["address"]
                 self.notify("Set Account #0 as recipient address.")
+
+        elif event.button.id == "btn-switch-seed":
+            self.push_screen(SeedModal(), self.load_wallet)
+
+        elif event.button.id == "btn-view-acc-key":
+            acc_table = self.query_one("#table-accounts", DataTable)
+            row_idx = acc_table.cursor_row
+            if 0 <= row_idx < len(self.public_accounts):
+                a = self.public_accounts[row_idx]
+            elif self.public_accounts:
+                a = self.public_accounts[0]
+            else:
+                a = None
+            if a:
+                self.push_screen(
+                    AccountModal(
+                        index=int(a["index"]),
+                        path=a["path"],
+                        address=a["address"],
+                        private_key=a["private_key"],
+                    )
+                )
+
+        elif event.button.id == "btn-check-balances":
+            self.notify("Fetching live balances from Ethereum L1 RPC...")
+            acc_table = self.query_one("#table-accounts", DataTable)
+            acc_table.clear()
+            for idx, a in enumerate(self.public_accounts):
+                try:
+                    bal = fetch_eth_balance(a["address"])
+                    a["balance"] = f"{bal:.6f} ETH"
+                except Exception:
+                    a["balance"] = "Error"
+                acc_table.add_row(f"#{idx}", a["path"], a["address"], a["balance"])
+            self.notify("Updated accounts balances from L1 RPC! ✓")
+
+        elif event.button.id == "btn-set-acc-recipient":
+            acc_table = self.query_one("#table-accounts", DataTable)
+            row_idx = acc_table.cursor_row
+            if 0 <= row_idx < len(self.public_accounts):
+                a = self.public_accounts[row_idx]
+            elif self.public_accounts:
+                a = self.public_accounts[0]
+            else:
+                a = None
+            if a:
+                self.query_one("#input-withdraw-recipient", Input).value = a["address"]
+                self.notify(f"Set Account #{a['index']} ({a['address'][:10]}...) as withdrawal recipient!")
 
         elif event.button.id == "btn-verify-zk":
             mode_select = self.query_one("#select-proof-mode", Select)
@@ -665,13 +761,14 @@ class KohakuApp(App[None]):
                         calldata=self.last_withdrawal["calldata"],
                         pool_id=self.last_withdrawal["pool_id"],
                         is_relayer=is_relayer,
-                        recipient=self.last_withdrawal.get("recipient", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+                        recipient=self.last_withdrawal.get("recipient", self.public_accounts[0]["address"] if self.public_accounts else "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
                         relayer_address=self.last_withdrawal.get("relayer", "0xda0b76cc92e94a6f972Ed29C104BBe8d73c2f753"),
                         fee=self.last_withdrawal.get("fee", 0),
                         refund=self.last_withdrawal.get("refund", 0),
                         root=self.last_withdrawal.get("root", 12345),
                         nullifier_hash=self.last_withdrawal.get("nullifier_hash", 67890),
                         proof_hex=self.last_withdrawal.get("groth16_proof_hex", ""),
+                        accounts=self.public_accounts,
                     )
                 )
             else:
@@ -700,3 +797,8 @@ def run_tui(mnemonic: str | None = None, chain_id: int = 1) -> None:
     """Launches the Kohaku TUI application."""
     app = KohakuApp(mnemonic=mnemonic, chain_id=chain_id)
     app.run()
+
+
+if __name__ == "__main__":
+    run_tui()
+

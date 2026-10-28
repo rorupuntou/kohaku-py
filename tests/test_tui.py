@@ -31,6 +31,14 @@ def test_tui_interactive_wallet_lifecycle():
             await pilot.pause()
             assert len(app.derived_notes) == 4
 
+            # 1.1 Test View Account Key & Details (AccountModal)
+            app.query_one("#btn-view-acc-key").press()
+            await pilot.pause()
+            from kohaku.tui.modals import AccountModal
+            assert any(isinstance(s, AccountModal) for s in app.screen_stack)
+            app.screen.query_one("#btn-close-account").press()
+            await pilot.pause()
+
             # 2. Test Note sync
             app.query_one("#btn-sync-notes").press()
             await pilot.pause()

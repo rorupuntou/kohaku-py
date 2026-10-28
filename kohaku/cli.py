@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from kohaku.privacy_pools.note import PrivacyPoolNote
@@ -261,6 +262,40 @@ def cmd_stealth_generate_address(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_derive_key(args: argparse.Namespace) -> int:
+    from eth_account import Account
+    from eth_utils import to_checksum_address
+    from kohaku.tui.modals import DEV_TEST_SEED, fetch_eth_balance
+
+    Account.enable_unaudited_hdwallet_features()
+    mnemonic = getattr(args, "mnemonic", None) or os.environ.get("EDW_MNEMONIC") or DEV_TEST_SEED
+    idx = getattr(args, "index", 0)
+    rpc_url = getattr(args, "rpc", "https://ethereum-rpc.publicnode.com")
+
+    path = f"m/44'/60'/0'/0/{idx}"
+    acc = Account.from_mnemonic(mnemonic.strip(), account_path=path)
+    addr = to_checksum_address(acc.address)
+    pk = acc.key.hex()
+    if not pk.startswith("0x"):
+        pk = f"0x{pk}"
+
+    print(f"=== Kohaku Account #{idx} Key & Balance ===")
+    print(f"  Derivation Path: {path}")
+    print(f"  Public Address:  {addr}")
+    print(f"  Private Key:     {pk}")
+    print(f"  Connecting to:   {rpc_url}")
+    try:
+        bal = fetch_eth_balance(addr, rpc_url)
+        print(f"  Live Balance:    {bal:.6f} ETH")
+        if bal <= 0.000005:
+            print("  ⚠️ Warning: Account has 0 ETH on this network. L1 direct broadcasts will fail without funds for gas.")
+        else:
+            print("  ✓ Sufficient funds for gas operations.")
+    except Exception as e:
+        print(f"  Live Balance:    (Error querying RPC: {e})")
+    return 0
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     from kohaku.tui.app import run_tui
 
@@ -359,6 +394,13 @@ def main() -> None:
     gen_p = stealth_sub.add_parser("generate-address", help="Generate one-time stealth address for a recipient meta-address")
     gen_p.add_argument("meta_address", help="Stealth meta-address URI (st:<chain>:0x...) or raw 66-byte hex")
     gen_p.set_defaults(func=lambda client, args: cmd_stealth_generate_address(args))
+
+    # derive-key
+    dk_p = subparsers.add_parser("derive-key", help="Derive private key and query ETH balance from seed phrase")
+    dk_p.add_argument("--mnemonic", help="BIP-39 mnemonic phrase (defaults to DEV test seed or EDW_MNEMONIC)")
+    dk_p.add_argument("--index", type=int, default=0, help="Account index (m/44'/60'/0'/0/i, default: 0)")
+    dk_p.add_argument("--rpc", default="https://ethereum-rpc.publicnode.com", help="Ethereum RPC endpoint for balance query")
+    dk_p.set_defaults(func=lambda client, args: cmd_derive_key(args))
 
     # tui
     tui_p = subparsers.add_parser("tui", help="Launch interactive Terminal Desktop Wallet UI (edw-py)")
