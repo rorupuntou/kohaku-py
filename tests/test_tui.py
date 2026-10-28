@@ -67,6 +67,33 @@ def test_tui_interactive_wallet_lifecycle():
             await pilot.pause()
             assert "0x21a0adb6" in str(res_box.content)
             assert "cast send" in str(res_box.content)
+            assert app.last_withdrawal is not None
+
+            # Test Copy Cast command and calldata
+            app.query_one("#btn-copy-cast").press()
+            await pilot.pause()
+            assert "cast send" in app._clipboard
+
+            app.query_one("#btn-copy-calldata").press()
+            await pilot.pause()
+            assert "0x21a0adb6" in app._clipboard
+
+            # Test Export Payload JSON
+            export_file = Path.cwd() / f"withdrawal_{app.last_withdrawal['pool_id']}.json"
+            if export_file.exists():
+                export_file.unlink()
+            app.query_one("#btn-export-payload").press()
+            await pilot.pause()
+            assert export_file.exists()
+            export_file.unlink()
+
+            # Test Broadcast Modal Open and Cancel
+            app.query_one("#btn-broadcast-dialog").press()
+            await pilot.pause()
+            from kohaku.tui.modals import BroadcastModal
+            assert any(isinstance(s, BroadcastModal) for s in app.screen_stack)
+            app.screen.query_one("#btn-cancel-broadcast").press()
+            await pilot.pause()
 
             # 5. Test Stealth Address generation
             app.action_switch_tab("tab-stealth")

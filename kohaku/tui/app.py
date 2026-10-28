@@ -32,7 +32,7 @@ from kohaku.tornado.tx import build_deposit_transactions
 from kohaku.tornado.withdraw import WITHDRAW_SELECTOR, build_withdraw_transaction
 from kohaku.tornado.zk.codec import Groth16Proof
 from kohaku.tornado.zk.verifier import verify_groth16_proof
-from kohaku.tui.modals import NoteModal, SeedModal
+from kohaku.tui.modals import BroadcastModal, NoteModal, SeedModal
 
 Account.enable_unaudited_hdwallet_features()
 
@@ -168,6 +168,20 @@ class KohakuApp(App[None]):
         self.public_accounts: list[dict[str, str]] = []
         self.derived_notes: list[TornadoNote] = []
         self.client = SagaClient()
+        self.last_withdrawal: dict[str, Any] | None = None
+
+    def copy_text(self, text: str) -> None:
+        """Copies text to clipboard using Textual OSC 52 and desktop tools."""
+        self.copy_to_clipboard(text)
+        try:
+            import shutil
+            import subprocess
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=False)
+            elif shutil.which("xclip"):
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
+        except Exception:
+            pass
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -255,6 +269,11 @@ class KohakuApp(App[None]):
                         "Configure parameters and click 'Build Withdrawal Calldata' to generate 256B Groth16 calldata...",
                         id="withdraw-result-box",
                     )
+                    with Horizontal(classes="action-bar"):
+                        yield Button("📋 Copy Cast Command", variant="primary", id="btn-copy-cast")
+                        yield Button("📋 Copy Calldata", variant="default", id="btn-copy-calldata")
+                        yield Button("💾 Export JSON", variant="default", id="btn-export-payload")
+                        yield Button("🚀 Broadcast On-Chain / Relayer", variant="warning", id="btn-broadcast-dialog")
 
             with TabPane("🕵️ Stealth Addresses", id="tab-stealth"):
                 with ScrollableContainer(classes="panel-box"):
@@ -568,7 +587,28 @@ class KohakuApp(App[None]):
             )
 
             mode_label = "Direct L1 Transaction (User Pays Gas)" if relayer == "0x0000000000000000000000000000000000000000" else "On-Chain Relayer Delivery"
+            cast_cmd = f"cast send {pool.contract_address} {tx.data} --from <YOUR_ADDRESS> --private-key <KEY>"
+
+            self.last_withdrawal = {
+                "pool_id": pool.id,
+                "amount": pool.amount,
+                "asset": pool.asset,
+                "contract": pool.contract_address,
+                "recipient": recipient,
+                "delivery_mode": mode_label,
+                "relayer": relayer,
+                "fee": fee_val,
+                "groth16_proof_hex": proof.to_hex(),
+                "selector": f"0x{WITHDRAW_SELECTOR.hex()}",
+                "calldata": tx.data,
+                "calldata_len": len(bytes.fromhex(tx.data[2:])),
+                "cast_command": cast_cmd,
+            }
+
             result_text = (
+                f"🚀 READY-TO-RUN CAST COMMAND:\n"
+                f"  {cast_cmd}\n\n"
+                f"════════════════════════════════════════════════════════════════════════════\n"
                 f"Pool:            {pool.id} ({pool.amount} {pool.asset})\n"
                 f"Contract:        {pool.contract_address}\n"
                 f"Recipient:       {recipient}\n"
@@ -577,12 +617,55 @@ class KohakuApp(App[None]):
                 f"Groth16 Proof:   {proof.to_hex()[:26]}... [G1: 64B, G2: 128B, G1: 64B] (256B)\n"
                 f"Function:        withdraw(bytes,bytes32,bytes32,address,address,uint256,uint256)\n"
                 f"Selector:        0x{WITHDRAW_SELECTOR.hex()}\n"
-                f"Calldata (Len):  {len(bytes.fromhex(tx.data[2:]))} bytes\n\n"
-                f"CLI Cast Command:\n"
-                f"  cast send {pool.contract_address} {tx.data} --from <YOUR_ADDRESS> --private-key <KEY>"
+                f"Calldata (Len):  {len(bytes.fromhex(tx.data[2:]))} bytes\n"
+                f"Raw Calldata:    {tx.data[:46]}...{tx.data[-20:]}\n\n"
+                f"💡 Use the action buttons below to Copy Cast Command, Copy Calldata, Export JSON, or Broadcast!"
             )
             result_box = self.query_one("#withdraw-result-box", Static)
             result_box.update(result_text)
+            self.notify("Withdrawal payload built! Ready to copy or broadcast.")
+
+        elif event.button.id == "btn-copy-cast":
+            if self.last_withdrawal:
+                cmd = self.last_withdrawal["cast_command"]
+                self.copy_text(cmd)
+                self.notify("Copied Cast command to clipboard! 📋")
+            else:
+                self.notify("Please click 'Build Withdrawal Calldata' first.", severity="warning")
+
+        elif event.button.id == "btn-copy-calldata":
+            if self.last_withdrawal:
+                calldata = self.last_withdrawal["calldata"]
+                self.copy_text(calldata)
+                self.notify(f"Copied {len(calldata)} chars of raw calldata to clipboard! 📋")
+            else:
+                self.notify("Please click 'Build Withdrawal Calldata' first.", severity="warning")
+
+        elif event.button.id == "btn-export-payload":
+            if self.last_withdrawal:
+                export_path = Path.cwd() / f"withdrawal_{self.last_withdrawal['pool_id']}.json"
+                try:
+                    with open(export_path, "w", encoding="utf-8") as f:
+                        json.dump(self.last_withdrawal, f, indent=2)
+                    self.notify(f"Saved payload JSON to {export_path.name} 💾")
+                except Exception as e:
+                    self.notify(f"Error saving file: {e}", severity="error")
+            else:
+                self.notify("Please click 'Build Withdrawal Calldata' first.", severity="warning")
+
+        elif event.button.id == "btn-broadcast-dialog":
+            if self.last_withdrawal:
+                is_relayer = self.last_withdrawal["relayer"] != "0x0000000000000000000000000000000000000000"
+                self.push_screen(
+                    BroadcastModal(
+                        contract_address=self.last_withdrawal["contract"],
+                        calldata=self.last_withdrawal["calldata"],
+                        pool_id=self.last_withdrawal["pool_id"],
+                        is_relayer=is_relayer,
+                    )
+                )
+            else:
+                self.notify("Please click 'Build Withdrawal Calldata' first.", severity="warning")
 
         elif event.button.id == "btn-gen-stealth":
             inp = self.query_one("#input-recipient-meta", Input)
