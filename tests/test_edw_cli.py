@@ -225,5 +225,22 @@ def test_edw_cli_erc20_shield_and_unshield(tmp_path: Path, capsys):
     assert "SPONSORED ERC-20 (USDC)" in out
     assert "[SPONSOR] 0.1 ETH note pays gas through Tornado paymaster" in out
     assert "[TAIL #1] 100 USDC note" in out
+    assert "Groth16 Proof (256B):" in out
+
+    # 4. Dry-run unshield with dry_run=True
+    args_un_dry = DummyArgs(
+        data_dir=data_dir,
+        chain_id=chain_id,
+        password=password,
+        amount="100",
+        token="USDC",
+        to="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        dry_run=True,
+    )
+    ret = cmd_unshield(args_un_dry)
+    assert ret == 0
+    out_dry = capsys.readouterr().out
+    assert "[DRY-RUN]" in out_dry
+
 
 

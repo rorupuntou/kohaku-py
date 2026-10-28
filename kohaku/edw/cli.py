@@ -408,6 +408,22 @@ def cmd_unshield(args: argparse.Namespace) -> int:
             print(
                 f"  [{idx + 1}] {t.amount:<5} ETH | ID: {t.id} | Leaf: #{t.leaf_index} | NullifierHash: {t.nullifier_hash_hex[:18]}...{fee_info}{jitter_info}"
             )
+    from kohaku.tornado.zk.codec import Groth16Proof
+    proof_file = getattr(args, "proof_file", None)
+    if proof_file and Path(proof_file).exists():
+        import json
+        with open(proof_file) as pf:
+            p_data = json.load(pf)
+        if "pi_a" in str(p_data):
+            proof = Groth16Proof.from_snarkjs_dict(p_data)
+        else:
+            proof = Groth16Proof.from_arkworks_dict(p_data)
+    else:
+        proof = Groth16Proof.mock()
+
+    is_dry_run = getattr(args, "dry_run", False)
+    dry_run_str = " [DRY-RUN]" if is_dry_run else ""
+    print(f"Groth16 Proof (256B): {proof.to_hex()[:26]}... [G1: 64B, G2: 128B, G1: 64B]{dry_run_str}")
     print("════════════════════════════════════════════════════════════════════════════")
     return 0
 
@@ -646,6 +662,15 @@ def main() -> None:
         type=int,
         default=0,
         help="Max random delay (seconds) per additional note to mitigate multi-note timing correlation",
+    )
+    un_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate unshielding and format 256-byte Groth16 proof without on-chain broadcast",
+    )
+    un_p.add_argument(
+        "--proof-file",
+        help="Optional path to custom JSON file containing Groth16 proof",
     )
     un_p.set_defaults(func=cmd_unshield)
 

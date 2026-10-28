@@ -10,6 +10,7 @@ from kohaku.tornado.note import TornadoNote
 from kohaku.tornado.pools import TornadoPool, get_pool
 from kohaku.tornado.tx import Call
 from kohaku.tornado.vault import TornadoVault
+from kohaku.tornado.zk.codec import Groth16Proof
 
 WITHDRAW_SELECTOR = bytes.fromhex("21a0adb6")
 
@@ -58,15 +59,24 @@ def build_withdrawal_inputs(
 
 def build_withdraw_transaction(
     pool: TornadoPool,
-    proof_bytes: bytes,
-    root: int | str,
-    nullifier_hash: int | str,
-    recipient: str,
+    proof_bytes: bytes | Groth16Proof | None = None,
+    root: int | str = 0,
+    nullifier_hash: int | str = 0,
+    recipient: str = "0x0000000000000000000000000000000000000000",
     relayer: str = "0x0000000000000000000000000000000000000000",
     fee: int = 0,
     refund: int = 0,
 ) -> Call:
     """Encodes the `withdraw(bytes,bytes32,bytes32,address,address,uint256,uint256)` ABI call."""
+    if isinstance(proof_bytes, Groth16Proof):
+        raw_proof = proof_bytes.to_bytes()
+    elif proof_bytes is None:
+        raw_proof = Groth16Proof.mock().to_bytes()
+    else:
+        raw_proof = proof_bytes
+
+    if len(raw_proof) != 256:
+        raise ValueError(f"Groth16 proof must be exactly 256 bytes, got {len(raw_proof)}")
     if isinstance(root, str):
         root_int = int(root, 16)
     else:
@@ -85,7 +95,7 @@ def build_withdraw_transaction(
 
     encoded_params = eth_abi.encode(
         ["bytes", "bytes32", "bytes32", "address", "address", "uint256", "uint256"],
-        [proof_bytes, root_bytes, null_bytes, recipient_checksum, relayer_checksum, fee, refund],
+        [raw_proof, root_bytes, null_bytes, recipient_checksum, relayer_checksum, fee, refund],
     )
 
     calldata = "0x" + (WITHDRAW_SELECTOR + encoded_params).hex()

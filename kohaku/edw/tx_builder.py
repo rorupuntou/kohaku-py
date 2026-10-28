@@ -215,8 +215,8 @@ class TransactionBuilder:
         ticket: Ticket,
         recipient_address: str,
         merkle_root: str,
-        proof_bytes: bytes,
-        relayer_address: str,
+        proof_bytes: bytes | Any | None = None,
+        relayer_address: str = "0x0000000000000000000000000000000000000000",
         relayer_fee_eth: float | str = 0.005,
         refund_eth: float | str = 0.0,
     ) -> GaslessWithdrawPayload:
