@@ -220,7 +220,7 @@ class BroadcastModal(ModalScreen[None]):
                 yield Input(value="https://mainnet-tornado-relayer.example.org/v1/tornadoWithdraw", id="input-relayer-url")
             else:
                 yield Label("Target Ethereum RPC Endpoint:", classes="modal-label")
-                yield Input(value="http://127.0.0.1:8545", id="input-rpc-url")
+                yield Input(value="https://ethereum-rpc.publicnode.com", placeholder="https://ethereum-rpc.publicnode.com or http://127.0.0.1:8545", id="input-rpc-url")
                 yield Label("Sender Private Key (Optional - for local signing & eth_sendRawTransaction):", classes="modal-label")
                 yield Input(placeholder="0x... (leave empty if node has unlocked account)", password=True, id="input-private-key")
 
