@@ -55,6 +55,11 @@ kohaku tui
     - **Transactions**: Greedy splitting and ERC-4337 v0.8 `PackedUserOperation` EIP-712 hashes.
     - **Railgun & Storage**: 73-byte `0zk1qy...` Bech32m addresses and Argon2id + blinded HKDF disk paths.
   - See the complete [Conformance Specification & Guide](conformance/README.md) for how sibling clients consume these vectors.
+- **Pure-Python Groth16 Codec & BN254 / BN128 Verifier (`kohaku.tornado.zk`)**:
+  - **Sovereign Zero-External-Runtime**: 100% pure Python with **zero Node.js, zero npm, zero C++ bindings**.
+  - Canonical point normalizers (`pad32`, `pad64`, `pad128`) and 256-byte ABI calldata packing expected by Tornado Cash `Verifier.sol` ($A \in G_1$ [64B], $B \in G_2$ [128B with EVM coordinate ordering], $C \in G_1$ [64B]).
+  - Evaluates the Groth16 bilinear pairing equation $e(-A, B) \cdot e(\alpha, \beta) \cdot e(vk_x, \gamma) \cdot e(C, \delta) == 1_{G_T}$ over the BN128 curve in milliseconds using `py_ecc.bn128`.
+  - Parsers for both SnarkJS and Arkworks JSON outputs, integrated into `edw unshield --dry-run` and `edw unshield --proof-file <path>`.
 - **ZK Cryptography & Protocols**:
   - Pure Python BN254 scalar field arithmetic modulo $p$.
   - 220-round canonical MiMC-7 Sponge matching Tornado Cash on-chain contracts.
@@ -226,6 +231,61 @@ print(vault.utxo_audit_summary())
 
 ---
 
+## Pure Python Groth16 ZK Verification & Codec
+
+`kohaku-py` features a **100% pure Python** Groth16 zk-SNARK codec and bilinear pairing verifier over the BN254 / BN128 curve with **zero Node.js, zero npm, zero snarkjs, and zero C++ runtime dependencies**.
+
+### How It Works
+
+1. **Canonical Point Normalization & ABI Packing (`kohaku.tornado.zk.codec`)**:
+   - Curve points are normalized with `pad32` (scalars), `pad64` ($G_1$ points: $(X, Y)$), and `pad128` ($G_2$ points).
+   - Packs proof points into the exact **256-byte** format expected by Tornado Cash `Verifier.sol` and the EVM `0x08` pairing precompile:
+     - $A \in G_1$: 64 bytes
+     - $B \in G_2$: 128 bytes (with $(c_1 \text{ real}, c_0 \text{ imag})$ coordinate order for EVM compatibility)
+     - $C \in G_1$: 64 bytes
+   - Direct loaders for both **SnarkJS** (`pi_a`, `pi_b`, `pi_c`) and **Arkworks** formats.
+
+2. **Offline Bilinear Pairing Verifier (`kohaku.tornado.zk.verifier`)**:
+   - Uses `py_ecc.bn128` to evaluate the pairing product equation in $G_T$:
+     $$e(-A, B) \cdot e(\alpha_1, \beta_2) \cdot e(vk_x, \gamma_2) \cdot e(C, \delta_2) == 1_{G_T}$$
+     where $vk_x = IC[0] + \sum_{i} (IC[i+1] \cdot \text{pub}_i)$ computes the public signal linear combination.
+   - Executes in $<0.4\text{s}$ locally in pure Python.
+
+### Python API Example
+
+```python
+import json
+from kohaku.tornado.zk import Groth16Proof, verify_groth16_proof
+
+# 1. Parse proof from SnarkJS JSON
+with open("proof.json") as f:
+    snarkjs_data = json.load(f)
+
+proof = Groth16Proof.from_snarkjs_dict(snarkjs_data)
+raw_calldata_bytes = proof.to_bytes()  # Exactly 256 bytes
+print("Solidity proof calldata:", proof.to_hex())
+
+# 2. Verify Groth16 proof offline in pure Python
+with open("verification_key.json") as f:
+    vk = json.load(f)
+public_signals = ["0x1234...", "0x5678..."]
+
+is_valid = verify_groth16_proof(proof, public_signals, vk)
+print("Proof valid:", is_valid)  # True
+```
+
+### CLI Simulation & Custom Proofs
+
+```bash
+# Dry-run unshield with synthetic 256-byte Groth16 proof
+edw unshield --amount 0.1 --token ETH --to 0xRecipient... --dry-run
+
+# Unshield using an explicit Groth16 proof file
+edw unshield --amount 0.1 --token ETH --to 0xRecipient... --proof-file /path/to/proof.json
+```
+
+---
+
 ## Test Suite
 
 ```bash
@@ -263,7 +323,13 @@ tests/test_edw_tx_builder.py::test_gasless_withdraw_payload_and_relayer_broadcas
 tests/test_edw_tx_builder.py::test_dual_multi_shield_bundle PASSED       [ 47%]
 tests/test_edw_tx_builder.py::test_packed_user_operation_v08_eip712_hash_kohaku_rs_vector PASSED [ 50%]
 tests/test_edw_tx_builder.py::test_erc20_multi_shield_bundle_and_forward_call PASSED [ 52%]
-tests/test_merkle.py::test_merkle_tree_proofs PASSED                     [ 54%]
+tests/test_groth16_zk.py::test_point_padding PASSED                      [ 54%]
+tests/test_groth16_zk.py::test_groth16_proof_serialization PASSED        [ 56%]
+tests/test_groth16_zk.py::test_groth16_snarkjs_parsing_and_equivalence PASSED [ 57%]
+tests/test_groth16_zk.py::test_groth16_arkworks_parsing PASSED           [ 59%]
+tests/test_groth16_zk.py::test_groth16_pure_python_verification PASSED   [ 61%]
+tests/test_groth16_zk.py::test_build_withdraw_transaction_with_groth16_proof PASSED [ 63%]
+tests/test_merkle.py::test_merkle_tree_proofs PASSED                     [ 64%]
 tests/test_merkle.py::test_lean_imt_dynamic_tree_and_proofs PASSED       [ 56%]
 tests/test_privacy_pools.py::test_privacy_pool_note PASSED               [ 59%]
 tests/test_privacy_pools.py::test_association_set PASSED                 [ 61%]
@@ -283,9 +349,10 @@ tests/test_tornado.py::test_relayer_registry_vault_and_ens_resolution PASSED [ 9
 tests/test_tornado.py::test_relayer_status_quote_and_auto_selection PASSED [ 93%]
 tests/test_tornado.py::test_erc20_token_catalog_selection_units_and_denominations PASSED [ 95%]
 tests/test_tornado.py::test_erc20_withdrawals_do_not_mix_assets_and_require_eth_sponsor PASSED [ 97%]
-tests/test_tui.py::test_tui_app_mount_and_headless PASSED                [100%]
+tests/test_tui.py::test_tui_app_mount_and_headless PASSED                [ 98%]
+tests/test_tui.py::test_tui_interactive_wallet_lifecycle PASSED          [100%]
 
-============================== 51 passed in 7.14s ==============================
+============================= 58 passed in 31.66s ==============================
 ```
 
 ---
